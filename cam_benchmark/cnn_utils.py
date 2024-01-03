@@ -32,8 +32,20 @@ def denormalize_tensor_for_dataset(t,dataset= None):
         return out
     else:
         assert False
-def normalize_tensor(t,vgg_mean=[0.485, 0.456, 0.406],
-                     vgg_std=[0.229, 0.224, 0.225]):
+vgg_mean=[0.485, 0.456, 0.406]
+vgg_std=[0.229, 0.224, 0.225]
+def get_vgg_transform(size):
+    vgg_transform = torchvision.transforms.Compose(
+        [
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Resize(size),
+            torchvision.transforms.Normalize(mean=vgg_mean,std=vgg_std),
+            ]
+        )
+    return vgg_transform
+
+def normalize_tensor(t,vgg_mean=vgg_mean,
+                     vgg_std=vgg_std):
     device = t.device
     # out = (t - torch.tensor(vgg_mean).to(device)[None,:,None,None])/torch.tensor(vgg_std).to(device)[None,:,None,None]
     # out = (t * torch.tensor(vgg_std).to(device)[None,:,None,None]) + torch.tensor(vgg_mean).to(device)[None,:,None,None]
@@ -46,9 +58,9 @@ def get_image_tensor(impath,size=(224,),dataset=None):
     if im_.ndim == 2:
         im_ = np.concatenate([im_[...,None],im_[...,None],im_[...,None]],axis=-1)
     im_pil = Image.fromarray(im_)
-    import ipdb;ipdb.set_trace()
+    # import ipdb;ipdb.set_trace()
     if dataset == 'imagenet':
-        from cam_benchmark.cnn import get_vgg_transform
+        # from cam_benchmark.cnn import get_vgg_transform
         vgg_transform = get_vgg_transform(size)
         ref = vgg_transform(im_pil).unsqueeze(0)
         return ref
@@ -94,10 +106,12 @@ def get_model(dataset,modelname,is_relevancecam,device=None):
         return MockObject()    
     if dataset in ['imagenet','']:
         dataset = 'imagenet'
-        if dutils.hack2('ignore model',default = False):
-           import torchvision
-           model = torchvision.models.vgg16(pretrained=True).to(device)
-        else:
+        # if dutils.hack2('ignore model',default = False):
+        #    import torchvision
+        #    model = torchvision.models.vgg16(pretrained=True).to(device)
+        # else:
+        # dutils.pause()
+        if True:
             import cam_benchmark.libre_cam_models.relevance.vgg
             import cam_benchmark.libre_cam_models.relevance.resnet
             # import ipdb;ipdb.set_trace()
@@ -121,4 +135,29 @@ def get_model(dataset,modelname,is_relevancecam,device=None):
     model.dataset = dataset
     return model
 
+VOC_ROOT_DIR = '/root/bigfiles/dataset/voc/VOCdevkit/VOC2007'
+IMAGENET_ROOT_DIR = '/root/bigfiles/dataset/imagenet/'
 
+def get_image_tensor_and_gt(impath,size=dutils.TODO,dataset=dutils.TODO):
+    # im = skimage.io.imread(impath)
+    # im_pil = Image.fromarray(im)
+    imroot = os.path.splitext(os.path.basename(impath))[0]
+    ref = get_image_tensor(impath,size=(224,),dataset=dataset)
+    import cam_benchmark.imagenet_localization_parser
+    # cam_benchmark.get_gt_bbox(impath,class_name,size)
+    if dataset == 'imagenet':
+        imagenet_annotation_dir = os.path.join(IMAGENET_ROOT_DIR,"bboxes/val/")
+        label = cam_benchmark.imagenet_localization_parser.get_voc_label(
+    root_dir = imagenet_annotation_dir,
+    x = imroot,
+    full_filename = None)
+        bbox_info = label
+        synsets = [obj['name'] for obj in label['annotation']['object']]
+        import cam_benchmark.synset_utils
+        target_ids = [cam_benchmark.synset_utils.synset_id_to_imagenet_class_ix(synset) for synset in synsets]
+        classnames = [cam_benchmark.synset_utils.synset_id_to_imagenet_class_name(synset) for synset in synsets]
+        # pass
+    
+    # dutils.pause()
+    return ref,bbox_info,target_ids,classnames
+    

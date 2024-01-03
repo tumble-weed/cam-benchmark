@@ -1,4 +1,4 @@
-dataset_dir="/root/bigfiles/datasets"
+dataset_dir="/root/bigfiles/dataset"
 (
 mkdir -p $dataset_dir/imagenet/bboxes  && \
 gdown 173q2SclMLyVyZbIvGh_0d6P06gL7mMbt && \
