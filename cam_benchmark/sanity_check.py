@@ -67,6 +67,7 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
             saliency = run_method(model,ref,target)
         if isinstance(saliency,torch.Tensor):
             saliency = tensor_to_numpy(saliency)
+        dutils.pause()
         results_dict = {
             'n_layers_randomized':n_layers,
             'saliency': saliency,
@@ -76,10 +77,11 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
         }
         cascade_sanity_results.append(results_dict)
         n_layers += 1
-        # dutils.pause()
+        '''
         if dutils.hack('early break',default=True):
             if n_layers == 4:
                 break
+        '''
         del model
     # dutils.pause()
     
