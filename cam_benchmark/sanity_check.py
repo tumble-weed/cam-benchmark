@@ -1,6 +1,9 @@
 import dutils
 dutils.init()
 import torchvision
+METRICS_ROOT_DIR = '/root/bigfiles/other/metrics-torchray' 
+ROOT_DIR_FOR_SAVE= os.path.join(METRICS_ROOT_DIR,'sanity')
+os.makedirs(ROOT_DIR_FOR_SAVE,exist_ok=True)
 #..................................................
 def randomize_linear_layer(l):
     str_class = str(l.__class__).lower()
@@ -16,6 +19,8 @@ def randomize_conv2d_layer(l):
     pass
 #..................................................
 def randomize_last_n_layers(model,n):
+    if n == 0:
+        return False
     if 'vgg' in str(model.__class__):
         classifier_layers = list(model.classifier.children())
         feature_layers = list(model.features.children())
@@ -44,9 +49,10 @@ def randomize_last_n_layers(model,n):
 # def create_randomized_model(model,n_layers):
 #     return False
 def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
-    n_layers = 1
+    n_layers = 0
     cascade_sanity_results = []
     while True:
+        print(f'{n_layers} layers')
         if dataset == 'voc_2007':
             # model = dutils.hardcode(model = torchvision.models.vgg16(pretrained=True))
             from torchray.benchmark.models import get_model, get_transform
@@ -67,7 +73,7 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
             saliency = run_method(model,ref,target)
         if isinstance(saliency,torch.Tensor):
             saliency = tensor_to_numpy(saliency)
-        dutils.pause()
+        #dutils.pause()
         results_dict = {
             'n_layers_randomized':n_layers,
             'saliency': saliency,
@@ -79,7 +85,7 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
         n_layers += 1
         '''
         if dutils.hack('early break',default=True):
-            if n_layers == 4:
+            if n_layers == 2:
                 break
         '''
         del model
@@ -89,7 +95,7 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
     
     
 def run_and_save_sanity_check(ref,target,run_method,method,dataset,arch,imroot,device='cuda',
-cascade_parent_dir = dutils.TODO,
+save_dir = dutils.TODO,
 ):
     cascade_sanity_results = run_cascade_sanity(ref,target,run_method,method,dataset,arch,device=device)
     # cascade_sanity_results = dutils.hardcode(
@@ -99,10 +105,16 @@ cascade_parent_dir = dutils.TODO,
 
     # )
     # dutils.pause()
-    savepath = os.path.join(cascade_parent_dir,f'cascade_sanity-{dataset}-{method}-{arch}-{imroot}.pkl')
-    dutils.pause()
+    savepath = os.path.join(save_dir,f'cascade_sanity-{dataset}-{method}-{arch}-{imroot}.pkl')
     with open(savepath,'wb') as f:
         pickle.dump(cascade_sanity_results,f)
+    dutils.note('save the sanity results as images as well')
+    image_save_dir = os.path.join(save_dir,f'cascade_sanity-{dataset}-{method}-{arch}-{imroot}')
+
+    for resultsi in cascade_sanity_results:
+        n_layers_randomized = resultsi['n_layers_randomized']
+        dutils.img_save(resultsi['saliency'],os.path.join(image_save_dir,f'{n_layers_randomized}.png'),use_matplotlib=False,cmap='jet')
+    dutils.pause()
     pass
 # run_and_save_sanity_check()
 def dummy_attribution(model,ref,target):
@@ -142,7 +154,8 @@ def get_wrapper_for_extremal_perturbation(method,dataset,method_kwargs):
 
 def main(method,dataset,arch,imroot,target,device='cuda'):
     dutils.note('pass device')
-    cascade_parent_dir = '/root/bigfiles/other/results-torchray'
+    #metrics_root_dir = '/root/bigfiles/other/results-torchray'
+    # metrics_root_dir = '/root/bigfiles/other/metrics-torchray'
     imroot = os.path.splitext(os.path.basename(imroot))[0]
     if dataset == 'voc_2007':
         # ref = dutils.hardcode(ref = torch.zeros(1,3,224,224,device=device))
@@ -184,11 +197,11 @@ def main(method,dataset,arch,imroot,target,device='cuda'):
     elif method == 'dummy1':
         run_method = dummy_attribution
     dutils.note('extremal_perturbation...gp, multithresh_saliency')
-    run_and_save_sanity_check(ref,target,run_method,method,dataset,arch,imroot,device=device,cascade_parent_dir=cascade_parent_dir)
+    run_and_save_sanity_check(ref,target,run_method,method,dataset,arch,imroot,device=device,save_dir=ROOT_DIR_FOR_SAVE)
     # dutils.pause()
 
     pass
-if __name__ == '__main__':
+def test():
     args = dutils.hardcode(args=argparse.Namespace())
     args.method = "extremal_perturbation"
     # args.method = "extremal_perturbation_with_simple_scale_and_crop_normalized"
@@ -201,3 +214,17 @@ if __name__ == '__main__':
     dutils.note('check if target is valid for image')
     main(args.method,args.dataset,args.arch,args.imroot,args.target)
     # pass
+    ############################################
+    dutils.pause()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--method',type=str)
+    parser.add_argument('--dataset',type=str)
+    parser.add_argument('--arch',type=str)
+    parser.add_argument('--imroot',type=str)
+    parser.add_argument('--target',type=int)
+    args = parser.parse_args()
+    main(args.method,args.dataset,args.arch,args.imroot,args.target)
+    ############################################
+
+if __name__ == '__main__':
+    test()

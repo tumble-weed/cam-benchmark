@@ -16,7 +16,8 @@ mask,ratios_retained,batch_size=dutils.TODO):
         deleted_ref = delete(ref,mask,ratio_retained)
         deleted_images[i:i+1] = deleted_ref
     assert deleted_images.shape[0] <= batch_size, 'implement batched forward'
-    scores = model(deleted_images)
+    with torch.inference_mode():
+        scores = model(deleted_images)
     probs = torch.softmax(scores,dim=1)
     probs = probs[:,target_id]
     '''
