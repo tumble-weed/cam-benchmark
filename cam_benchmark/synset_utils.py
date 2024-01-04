@@ -1,6 +1,7 @@
 import os
+import cam_benchmark.imagenet_synsets as imagenet_synsets
 def get_synset_id(synset_name):
-    import imagenet_synsets as imagenet_synsets
+    import cam_benchmark.imagenet_synsets as imagenet_synsets
     label_vs_id = {more['label']: ('n'+more['id'][:-2]) for ix,more in imagenet_synsets.synsets.items()}
     synset_id = None
     imagenet_ix = None
@@ -13,14 +14,15 @@ def get_synset_id(synset_name):
     # return synset_id,imagenet_ix
     return synset_id
 def synset_id_to_imagenet_class_ix(synset_id):
-    import imagenet_synsets as imagenet_synsets
     id_vs_class_ix = { ('n'+more['id'][:-2]):ix  for ix,more in imagenet_synsets.synsets.items()}
     return id_vs_class_ix[synset_id]
 def synset_id_to_imagenet_class_name(synset_id):
-    import imagenet_synsets as imagenet_synsets
     name_vs_class_ix = { ('n'+more['id'][:-2]):more['label']  for ix,more in imagenet_synsets.synsets.items()}
     return name_vs_class_ix[synset_id]
-    
+def class_id_to_synset_id(class_id):
+    synset_id = imagenet_synsets.synsets[class_id]['id']    
+    synset_id = 'n' + synset_id[:-len('-n')]
+    return synset_id
 
 def get_synset(synset_id):    
     if not os.path.isdir(f'benchmark/imagenet-synsets/{synset_id}'):
