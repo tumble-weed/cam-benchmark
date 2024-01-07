@@ -191,7 +191,7 @@ def main(method,dataset,arch,imroot,target,device='cuda'):
     if method.startswith('extremal_perturbation'):
         # run_method = dutils.hardcode(run_method = lambda *args,**kwargs:torch.zeros(1,1,224,224,device=device))
         # wrapper_for_extremal_perturbation
-        method_kwargs = {}
+        method_kwargs = {'areas':[0.025],'smooth':0 }
         run_method = get_wrapper_for_extremal_perturbation(method,dataset,method_kwargs)
         # pass
     elif method == 'dummy1':
