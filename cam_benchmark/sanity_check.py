@@ -3,6 +3,9 @@ dutils.init()
 import torchvision
 import skimage.transform
 import torch.nn
+from PIL import Image
+from torchray.benchmark.models import get_transform
+from torchray.benchmark.datasets import get_dataset
 METRICS_ROOT_DIR = '/root/bigfiles/other/metrics-torchray' 
 ROOT_DIR_FOR_SAVE= os.path.join(METRICS_ROOT_DIR,'sanity')
 os.makedirs(ROOT_DIR_FOR_SAVE,exist_ok=True)
@@ -72,10 +75,17 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
             # dutils.pause()
             model.to(device)
         elif 'imagenet' in dataset:
-            dutils.pause()
+            from torchray.benchmark.models import get_model, get_transform
+            model = get_model(
+                    arch=arch,
+                    dataset=dataset,
+                    convert_to_fully_convolutional=False,
+                )
+            model.to(device)
+            # dutils.pause()
             pass
-        if os.environ.get('DBG_SANITY',False) == '1':
-            n_layers = dutils.hardcode(n_layers=3)
+        # if os.environ.get('DBG_SANITY',False) == '1':
+        #     n_layers = dutils.hardcode(n_layers=3)
         is_too_many_layers = randomize_last_n_layers(model,n_layers)
         if is_too_many_layers:
             break
@@ -83,7 +93,7 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
             saliency = run_method(model,ref,target)
         if isinstance(saliency,torch.Tensor):
             saliency = tensor_to_numpy(saliency)
-        dutils.pause2('DBG_SANITY')
+        # dutils.pause2('DBG_SANITY')
         #dutils.pause()
         results_dict = {
             'n_layers_randomized':n_layers,
@@ -122,6 +132,7 @@ save_dir = dutils.TODO,
     dutils.note('save the sanity results as images as well')
     image_save_dir = os.path.join(save_dir,f'cascade_sanity-{dataset}-{method}-{arch}-{imroot}')
 
+    # for i,resultsi in dutils.trunciter(enumerate(cascade_sanity_results),enabled=True,max_iter=3):
     for i,resultsi in enumerate(cascade_sanity_results):
         n_layers_randomized = resultsi['n_layers_randomized']
         dutils.img_save(resultsi['saliency'],os.path.join(image_save_dir,f'{n_layers_randomized}.png'),use_matplotlib=False,cmap='jet')
@@ -209,8 +220,7 @@ def main(method,dataset,arch,imroot,target,device='cuda'):
     imroot = os.path.splitext(os.path.basename(imroot))[0]
     if dataset == 'voc_2007':
         # ref = dutils.hardcode(ref = torch.zeros(1,3,224,224,device=device))
-        from torchray.benchmark.models import get_transform
-        from torchray.benchmark.datasets import get_dataset
+
         if method == "rise":
             input_size = (224, 224)
         else:
@@ -241,8 +251,26 @@ def main(method,dataset,arch,imroot,target,device='cuda'):
         # dutils.pause()
         pass
     elif 'imagenet' in dataset:
-        dutils.pause()
-        pass
+        
+        input_size = 224
+        # subset = 'val'
+        transform = get_transform(size=input_size,
+                                  dataset=dataset)
+        
+        # data = get_dataset(name=dataset,
+        #                     subset=subset,
+        #                     transform=transform,
+        #                     download=False,
+        #                     limiter=None)
+
+        im_np = skimage.io.imread(imroot+'.JPEG')
+        im_pil = Image.fromarray(im_np)
+        ref = transform(im_pil)
+        assert ref.ndim == 3
+        ref = ref[None,...]
+        ref =ref.to(device)
+        # dutils.pause2('DBG_SANITY')
+        # pass
     if method.startswith('extremal_perturbation'):
         # run_method = dutils.hardcode(run_method = lambda *args,**kwargs:torch.zeros(1,1,224,224,device=device))
         # wrapper_for_extremal_perturbation
@@ -277,14 +305,23 @@ def test():
 
     ############################################
     # dutils.pause()
+    sample_data_info = [
+    ('000001.jpg',11,'voc_2007'),
+    ('000001.jpg',14,'voc_2007'),
+    ('000002.jpg',18,'voc_2007'),
+    ('/root/evaluate-saliency-4/cam-benchmark/cam_benchmark/ILSVRC2012_val_00015410.JPEG',13,'imagenet'),
+
+    ]
     parser = argparse.ArgumentParser()
     parser.add_argument('--method',type=str,default="extremal_perturbation")
     parser.add_argument('--dataset',type=str,default='voc_2007')
     parser.add_argument('--arch',type=str,default='vgg16')
     parser.add_argument('--imroot',type=str,default='000002.jpg')
     parser.add_argument('--target',type=int,default=18)
+    
     args = parser.parse_args()
     main(args.method,args.dataset,args.arch,args.imroot,args.target)
+    # /root/evaluate-saliency-4/cam-benchmark/cam_benchmark/ILSVRC2012_val_00015410.JPEG , 13
     ############################################
 
 if __name__ == '__main__':
