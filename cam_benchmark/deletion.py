@@ -1,15 +1,42 @@
 import dutils
 dutils.init()
 import glob
+import cam_benchmark.elp_masking as elp_masking
 METRICS_ROOT_DIR="/root/bigfiles/other/metrics-torchray/"
 RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
-def delete(ref,mask,ratio_retained):
-    masked = dutils.hardcode(masked = torch.zeros_like(ref))
-    return masked
+def delete(ref,mask,ratio_retained=None,perturbation = elp_masking.BLUR_PERTURBATION):
+    if ratio_retained is None:
+        if not( all([
+            len( mask.unique()) in [1,2],
+            mask.max() in [0.,1.],
+            mask.min() in [0.,1.],
+            ])):
+            dutils.pause()
+        mask_01 = mask
+    else:
+        #masked = dutils.hardcode(masked = torch.zeros_like(ref))
+        sorted_mask_descending,argsort_descending = torch.sort(sorted_mask)
+        dutils.pause()
+        cutoff_ix = int(len(sorted_mask_descending)*ratio_retained)
+        cutoff_value = sorted_mask_descending[cutoff_ix]
+        mask_01 = (mask >= cutoff_ix ).float()
+        dutils.pause()
+    masked,perturbation = elp_masking.get_masked_input(
+                            ref,
+                            mask_01,
+                            perturbation=perturbation,
+                            num_levels=8,
+                            # num_levels=12,
+                            variant=elp_masking.PRESERVE_VARIANT,
+                            smooth=0)    
+    return masked,perturbation
 
 def run_deletion_game(model,ref,target_id,
-mask,ratios_retained,batch_size=dutils.TODO):
+mask,ratios_retained,batch_size=dutils.TODO,
+    perturbation = elp_masking.BLUR_PERTURBATION,
+):
     device = ref.device
+    ratios_retained = torch.tensor(ratios_retained,device=device)
     deleted_images = torch.zeros((len(ratios_retained),) + ref.shape[1:],device=device)
     ref_scores = model(ref)
     ref_probs = torch.softmax(ref_scores,dim=1)
@@ -18,9 +45,21 @@ mask,ratios_retained,batch_size=dutils.TODO):
         ref_probs = ref_probs.mean(dim=(-1,-2))
     ref_probs = ref_probs[:,target_id]
     ref_scores = ref_scores[:,target_id]
+    #=================================================================
+    assert mask.ndim == 4
+    assert mask.shape[:2] == (1,1)
+    sorted_mask_descending,argsort_descending = torch.sort(mask.flatten())
+    cutoff_ixs = (len(sorted_mask_descending)*ratios_retained).long()
+    cutoff_ixs = torch.clamp(cutoff_ixs,0,len(sorted_mask_descending) - 1).long()
+    cutoff_values = sorted_mask_descending[cutoff_ixs]
+    mask_01 = (mask <= cutoff_values[:,None,None,None] ).float()
+    #=================================================================
     for i,ratio_retained in enumerate(ratios_retained):
-        deleted_ref = delete(ref,mask,ratio_retained)
+        deleted_ref, perturbation= delete(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation)
         deleted_images[i:i+1] = deleted_ref
+
+    #dutils.img_save(deleted_images[i:i+1],'deleted.png')
+    #dutils.pause()
     assert deleted_images.shape[0] <= batch_size, 'implement batched forward'
     with torch.inference_mode():
         scores = model(deleted_images)
@@ -30,8 +69,9 @@ mask,ratios_retained,batch_size=dutils.TODO):
         probs = probs.mean(dim=(-1,-2))
     probs = probs[:,target_id]
     scores = scores[:,target_id]
-    dutils.note('check broadcasting of probs')
-    dutils.pause();
+    #dutils.note('check broadcasting of probs')
+    #dutils.pause();
+    assert probs.ndim == 1
     diff_in_probs = probs - ref_probs
     '''
     # (1,20,1,1)
@@ -50,7 +90,7 @@ mask,ratios_retained,batch_size=dutils.TODO):
         ratios = ratios_retained,
 
     )
-    #dutils.pause()
+    dutils.pause()
     return results
     #pass
 def main():
@@ -67,7 +107,7 @@ def main():
     """
     args = argparse.Namespace()
     args.batch_size = 32
-    args.method = dutils.hardcode(method = "dummy")
+    args.method = dutils.hardcode(method = "extremal_perturbation")
     args.arch = dutils.hardcode(arch= "resnet50")
     args.dataset = dutils.hardcode(dataset= "voc_2007")
     args.results_root_dir = dutils.hardcode(results_root_dir=RESULTS_ROOT_DIR)
@@ -82,6 +122,9 @@ batch_size = dutils.TODO,
     if len(ignore):
         print(colorful.red(f'need toadd {ignore.keys()} to run arguments'))
     ratios_retained = dutils.hardcode(ratios_retained=np.linspace(0,1,10))
+    ratios_retained = np.array(ratios_retained)
+    if not np.allclose((np.sort(ratios_retained ) - np.sort(1-ratios_retained)),np.zeros(ratios_retained.shape) ):
+        dutils.pause()
     device = dutils.hardcode(device="cuda")
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
     if dataset == 'voc_2007':
@@ -153,21 +196,28 @@ batch_size = dutils.TODO,
             continue
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         class_id =loaded['class_id']
-        mask = loaded['saliency']
+        saliency = loaded['saliency']
+        '''
+        if saliency.max() > 1:
+            saliency = saliency/saliency.max()
+        '''
+        if saliency.max() > 0:
+            saliency = saliency/saliency.max()
+        assert saliency.max() <= 1.
+        assert saliency.min() >= 0
         class_name = loaded['class_name']
-        assert mask.ndim == 4
-        mask = torch.tensor(mask,device=ref.device)
-        mask = torch.nn.functional.interpolate(mask,ref.shape[-2:],mode="bilinear")
-        dutils.img_save(mask,"mask.png")
-        dutils.pause()
+        assert saliency.ndim == 4
+        saliency = torch.tensor(saliency,device=ref.device)
+        saliency = torch.nn.functional.interpolate(saliency,ref.shape[-2:],mode="bilinear")
+        dutils.img_save(saliency,"saliency.png")
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-        results_insetion = run_deletion_game(model,ref,class_id,
-            mask,ratios_retained,batch_size=batch_size)
+        results_insertion = run_deletion_game(model,ref,class_id,
+            1-saliency,ratios_retained,batch_size=batch_size)
         results_deletion = run_deletion_game(model,ref,class_id,
-            mask,ratios_retained,batch_size=batch_size)
+           saliency,ratios_retained,batch_size=batch_size)
         results = dict(
         insertion = results_insertion,
-        deletion= results_deletion
+        deletion= results_deletion,
         arch = arch,
         dataset = dataset,
         method = method,
@@ -181,8 +231,11 @@ batch_size = dutils.TODO,
         """
         classname_classid_xz  = os.path.basename(xzfile)
         imroot = os.path.basename(os.path.dirname(xzfile))
-        os.makedirs(os.path.join(save_dir,imroot))
+        os.makedirs(os.path.join(save_dir,imroot),exist_ok=True)
         savepath = os.path.join(save_dir,imroot,classname_classid_xz)
+
+        dutils.pause()
+        print(savepath)
         with lzma.open(savepath,'wb') as f:
             pickle.dump(results_deletion,f)
 
