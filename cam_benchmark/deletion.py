@@ -90,7 +90,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
         ratios = ratios_retained,
 
     )
-    dutils.pause()
+    #dutils.pause()
     return results
     #pass
 def main():
@@ -209,21 +209,21 @@ batch_size = dutils.TODO,
         assert saliency.ndim == 4
         saliency = torch.tensor(saliency,device=ref.device)
         saliency = torch.nn.functional.interpolate(saliency,ref.shape[-2:],mode="bilinear")
-        dutils.img_save(saliency,"saliency.png")
+        #dutils.img_save(saliency,"saliency.png")
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         results_insertion = run_deletion_game(model,ref,class_id,
             1-saliency,ratios_retained,batch_size=batch_size)
         results_deletion = run_deletion_game(model,ref,class_id,
            saliency,ratios_retained,batch_size=batch_size)
         results = dict(
-        insertion = results_insertion,
-        deletion= results_deletion,
-        arch = arch,
-        dataset = dataset,
-        method = method,
-        imroot = imroot,
-        class_name = class_name,
-        class_id = class_id,
+            insertion = results_insertion,
+            deletion= results_deletion,
+            arch = arch,
+            dataset = dataset,
+            method = method,
+            imroot = imroot,
+            class_name = class_name,
+            class_id = class_id,
         )
         # break
         """
@@ -234,8 +234,8 @@ batch_size = dutils.TODO,
         os.makedirs(os.path.join(save_dir,imroot),exist_ok=True)
         savepath = os.path.join(save_dir,imroot,classname_classid_xz)
 
-        dutils.pause()
         print(savepath)
+        dutils.pause()
         with lzma.open(savepath,'wb') as f:
             pickle.dump(results_deletion,f)
 

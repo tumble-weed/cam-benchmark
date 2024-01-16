@@ -59,7 +59,38 @@ def randomize_last_n_layers(model,n):
     # pass
 # def create_randomized_model(model,n_layers):
 #     return False
+layer_name_dict = dict(
+    dict(vgg16 = 
+    {0:'original',
+        1:'fc8',
+    2:'fc7',
+    3:'fc6',
+
+    4:'conv5_3',
+    5:'conv5_2',
+    6:'conv5_1',
+
+    7:'conv4_3',
+    8:'conv4_2',
+    9:'conv4_1',
+
+
+    10:'conv3_3',
+    11:'conv3_2',
+    12:'conv3_1',
+
+
+    13:'conv2_2',
+    14:'conv2_1',
+
+
+    15:'conv1_2',
+    16:'conv1_1',
+        }
+    ),
+)
 def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
+    assert arch in layer_name_dict
     n_layers = 0
     cascade_sanity_results = []
     while True:
@@ -135,7 +166,7 @@ save_dir = dutils.TODO,
     # for i,resultsi in dutils.trunciter(enumerate(cascade_sanity_results),enabled=True,max_iter=3):
     for i,resultsi in enumerate(cascade_sanity_results):
         n_layers_randomized = resultsi['n_layers_randomized']
-        dutils.img_save(resultsi['saliency'],os.path.join(image_save_dir,f'{n_layers_randomized}.png'),use_matplotlib=False,cmap='jet')
+        dutils.img_save(resultsi['saliency'],os.path.join(image_save_dir,f'{n_layers_randomized}_{layer_name_dict[arch][n_layers_randomized]}.png'),use_matplotlib=False,cmap='jet')
         if i == 0:
             dutils.img_save(skimage.transform.resize(im_np,ref.shape[-2:],anti_aliasing=True),os.path.join(image_save_dir,f'original_image.png'),use_matplotlib=False,cmap='jet')
     dutils.pause()
