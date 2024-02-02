@@ -94,7 +94,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
     return results
     #pass
 def main():
-    """
+    #"""
     parser = argparse.ArgumentParser() 
     parser.add_argument("--method",type=str)
     parser.add_argument("--arch",type=str)
@@ -104,14 +104,15 @@ def main():
     parser.add_argument("--save_root_dir",type=str,default=METRICS_ROOT_DIR)
     parser.add_argument("--batch_size",type=int,default=32)
     args = parser.parse_args()
-    """
-    args = argparse.Namespace()
-    args.batch_size = 32
-    args.method = dutils.hardcode(method = "extremal_perturbation")
-    args.arch = dutils.hardcode(arch= "resnet50")
-    args.dataset = dutils.hardcode(dataset= "voc_2007")
-    args.results_root_dir = dutils.hardcode(results_root_dir=RESULTS_ROOT_DIR)
-    args.save_root_dir = dutils.hardcode(save_root_dir=METRICS_ROOT_DIR)
+    #"""
+    #args = argparse.Namespace()
+    #args.batch_size = 32
+    #args.method = dutils.hardcode(method = "extremal_perturbation")
+    #args.arch = dutils.hardcode(arch= "resnet50")
+    #args.dataset = dutils.hardcode(dataset= "voc_2007")
+    #args.results_root_dir = dutils.hardcode(results_root_dir=RESULTS_ROOT_DIR)
+    #args.save_root_dir = dutils.hardcode(save_root_dir=METRICS_ROOT_DIR)
+    # python cam_benchmark.deletion --method grad_cam --arch vgg16 --dataset imagenet-5000 --ratios 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 
     run(**vars(args))
 def run(method=dutils.TODO,dataset=dutils.TODO,arch=dutils.TODO,
 results_root_dir=dutils.TODO,
@@ -127,7 +128,8 @@ batch_size = dutils.TODO,
         dutils.pause()
     device = dutils.hardcode(device="cuda")
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    if dataset == 'voc_2007':
+    #if dataset == 'voc_2007':
+    if True:
 # model = dutils.hardcode(model = torchvision.models.vgg16(pretrained=True))
         from torchray.benchmark.models import get_model, get_transform
         model = get_model(
@@ -137,19 +139,39 @@ batch_size = dutils.TODO,
             )
 # dutils.pause()
         model.to(device)
-    elif 'imagenet' in dataset:
-        dutils.pause()
-        pass
+    #elif 'imagenet' in dataset:
+    #    dutils.pause()
+    #    pass
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    if dataset == 'voc_2007':
+    #if dataset == 'voc_2007':
         # ref = dutils.hardcode(ref = torch.zeros(1,3,224,224,device=device))
         from torchray.benchmark.models import get_transform
         from torchray.benchmark.datasets import get_dataset
-        if method == "rise":
-            input_size = (224, 224)
+        if dataset in ['voc_2007','coco']:
+            if method == "rise":
+                input_size = (224, 224)
+            else:
+                input_size = 224        
+        elif dataset in ['imagenet-5000']:
+            input_size = 224
+        elif dataset in ['cifar-10','cifar-100','mnist']:
+            input_size = (32,32)
         else:
-            input_size = 224        
-        subset = 'test'
+            dutils.pause()
+        #subset = 'test'
+        if dataset == 'voc_2007':
+            subset = 'test'
+        elif dataset == 'coco':
+            subset = 'val2014'
+        elif dataset == 'imagenet-5000':
+            subset = 'val'
+        elif dataset in ['cifar-10','cifar-100']:
+            subset = 'val'
+        elif dataset in ['mnist']:
+            subset = 'val'
+        else:
+            assert False
+       
         transform = get_transform(size=input_size,
                                   dataset=dataset)
         
@@ -158,9 +180,9 @@ batch_size = dutils.TODO,
                             transform=transform,
                             download=False,
                             limiter=None)
-    elif 'imagenet' in dataset:
-        dutils.pause()
-        pass
+    #elif 'imagenet' in dataset:
+    #    dutils.pause()
+    #    pass
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
     save_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}")
 
@@ -168,7 +190,7 @@ batch_size = dutils.TODO,
     pattern = os.path.join(methoddir,'*','*.xz') 
     xzfiles = glob.glob(pattern)
     # xzfiles = list(sorted(glob.glob(os.path.join(methoddir,'*','*.xz'))))
-    for xzfile in tqdm.tqdm(dutils.trunciter(xzfiles,enabled=True,max_iter=10)):
+    for xzfile in tqdm.tqdm(dutils.trunciter(xzfiles,enabled=False,max_iter=10)):
         print(xzfile)
         xzfile = os.path.abspath(xzfile)
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -235,11 +257,11 @@ batch_size = dutils.TODO,
         savepath = os.path.join(save_dir,imroot,classname_classid_xz)
 
         print(savepath)
-        dutils.pause()
+        #dutils.pause()
         with lzma.open(savepath,'wb') as f:
             pickle.dump(results_deletion,f)
 
-    dutils.pause()
+    #dutils.pause()
     '''
     <parent-directory>/000001/dog11.xz
     <parent-directory>/000001/person14.xz
