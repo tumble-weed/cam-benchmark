@@ -103,6 +103,7 @@ def main():
     parser.add_argument("--results_root_dir",type=str,default=RESULTS_ROOT_DIR)
     parser.add_argument("--save_root_dir",type=str,default=METRICS_ROOT_DIR)
     parser.add_argument("--batch_size",type=int,default=32)
+    parser.add_argument("--add-to-results-xz",type=lambda t:t.lower() == 'true',default=False,dest="add_to_results_xz")
     args = parser.parse_args()
     #"""
     #args = argparse.Namespace()
@@ -113,7 +114,53 @@ def main():
     #args.results_root_dir = dutils.hardcode(results_root_dir=RESULTS_ROOT_DIR)
     #args.save_root_dir = dutils.hardcode(save_root_dir=METRICS_ROOT_DIR)
     # python cam_benchmark.deletion --method grad_cam --arch vgg16 --dataset imagenet-5000 --ratios 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 
-    run(**vars(args))
+    if not args.add_to_results_xz:
+        run(**vars(args))
+    else:
+        add_to_results_xz(**vars(args))
+def add_to_results_xz(method=dutils.TODO,
+            arch=dutils.TODO,
+            dataset=dutils.TODO,
+            results_root_dir=dutils.TODO,
+            **kwargs,
+):
+    #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+    methoddir = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}')
+    resultpattern = os.path.join(methoddir,'*','*.xz') 
+    resultsxzfiles = glob.glob(resultpattern)
+
+    metrics_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}")
+    metricpattern = os.path.join(metrics_dir,'*','*.xz') 
+    metricsxzfiles = glob.glob(metricpattern)
+    # xzfiles = list(sorted(glob.glob(os.path.join(methoddir,'*','*.xz'))))
+    small_xzpath = "/root/bigfiles/other/results-torchray/mnist-grad_cam-resnet8/0/77.xz"
+
+    methoddir_new_results = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}_new_results')
+    with lzma.open(small_xzpath,'rb') as f:
+        small_loaded = pickle.load(f)
+
+    for resultxzfile,metricxzfile in tqdm.tqdm(dutils.trunciter(zip(resultsxzfiles,metricsxzfiles),enabled=False,max_iter=10)):
+        print(resultxzfile)
+        print(metricxzfile)
+        with lzma.open(resultxzfile,'rb') as f:
+            result = pickle.load(f) 
+        with lzma.open(metricxzfile,'rb') as f:
+            metric = pickle.load(f) 
+        result['insertion'] = metric['insertion']
+        result['deletion'] = metric['deletion']
+        stub = os.path.basename(resultxzfile)
+        new_resultsfile = os.path.join(methoddir,stub)
+        with lzma.open(new_resultsfile,'wb') as f:
+            pickle.dump(result,f)
+        with lzma.open(new_resultsfile,'rb') as f:
+            reloaded = pickle.load(f)
+        assert set(reloaded.keys()).intersection(set(small_loaded.keys())) == set(small_loaded.keys())
+        assert set(reloaded['insertion'].keys()) == set(small_loaded['insertion'].keys())
+        assert set(reloaded['deletion'].keys()) == set(small_loaded['deletion'].keys())
+        #dutils.pause()
+    
+    pass
 def run(method=dutils.TODO,dataset=dutils.TODO,arch=dutils.TODO,
 results_root_dir=dutils.TODO,
 save_root_dir=dutils.TODO,
@@ -259,7 +306,7 @@ batch_size = dutils.TODO,
         print(savepath)
         #dutils.pause()
         with lzma.open(savepath,'wb') as f:
-            pickle.dump(results_deletion,f)
+            pickle.dump(results,f)
 
     #dutils.pause()
     '''
