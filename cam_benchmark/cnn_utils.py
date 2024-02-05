@@ -131,6 +131,7 @@ def get_model(dataset,modelname,is_relevancecam,device=None):
                 )
     else:
         assert False
+    model.eval()
     model.to(device)
     model.dataset = dataset
     return model
