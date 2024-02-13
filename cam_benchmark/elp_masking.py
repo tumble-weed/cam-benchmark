@@ -241,7 +241,7 @@ class Perturbation:
             perturbed versions of the input tensor.
     """
 
-    def __init__(self, input, num_levels=8, max_blur=20, type=BLUR_PERTURBATION,input_b=None):
+    def __init__(self, input, num_levels=8, max_blur=20, type=BLUR_PERTURBATION,input_b=None,padding_mode='constant',padding_value=0):
         self.type = type
         self.num_levels = num_levels
         self.pyramid = []
@@ -255,7 +255,8 @@ class Perturbation:
                     #     dutils.pause()
                     # y0 is the most blurred version
                     # y = imsmooth(input, sigma=(1 - 0.1429) * max_blur)
-                    y = imsmooth(input, sigma=(1 - sigma) * max_blur)
+                    y = imsmooth(input, sigma=(1 - sigma) * max_blur,
+                    padding_mode=padding_mode,padding_value=padding_value)
                     
                     # import ipdb; ipdb.set_trace()
                 elif type == FADE_PERTURBATION:
@@ -344,6 +345,7 @@ def get_masked_input(
                     variant=PRESERVE_VARIANT,
                     smooth=0,
                     input_b = None,
+                    max_blur = 20,
                     ):
     r"""Compute a set of extremal perturbations.
 
@@ -407,6 +409,8 @@ def get_masked_input(
             num_levels=num_levels,
             type=perturbation,
             # input_b= input_b
+            max_blur = max_blur,
+            #padding_mode = 'reflect',
         ).to(device)
 
     perturbation_str = '\n  '.join(perturbation.__str__().split('\n'))
