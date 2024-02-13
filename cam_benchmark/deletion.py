@@ -2,9 +2,14 @@ import dutils
 dutils.init()
 import glob
 import cam_benchmark.elp_masking as elp_masking
+import cam_benchmark.road
 METRICS_ROOT_DIR="/root/bigfiles/other/metrics-torchray/"
 RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
-def delete(ref,mask,ratio_retained=None,perturbation = elp_masking.BLUR_PERTURBATION):
+def delete(ref,mask,ratio_retained=None,
+perturbation = elp_masking.BLUR_PERTURBATION,
+max_blur=20,
+imputation='blur',
+):
     if ratio_retained is None:
         if not( all([
             len( mask.unique()) in [1,2],
@@ -21,19 +26,34 @@ def delete(ref,mask,ratio_retained=None,perturbation = elp_masking.BLUR_PERTURBA
         cutoff_value = sorted_mask_descending[cutoff_ix]
         mask_01 = (mask >= cutoff_ix ).float()
         dutils.pause()
-    masked,perturbation = elp_masking.get_masked_input(
-                            ref,
-                            mask_01,
-                            perturbation=perturbation,
-                            num_levels=8,
-                            # num_levels=12,
-                            variant=elp_masking.PRESERVE_VARIANT,
-                            smooth=0)    
+    if imputation == 'blur':
+        masked,perturbation = elp_masking.get_masked_input(
+                                ref,
+                                mask_01,
+                                perturbation=perturbation,
+                                num_levels=8,
+                                # num_levels=12,
+                                variant=elp_masking.PRESERVE_VARIANT,
+                                max_blur=max_blur,
+                                smooth=0)    
+    elif imputation == 'road':
+        imputer = cam_benchmark.road.NoisyLinearImputer()
+        #imputer.to(ref.device)
+        assert ref.shape[0] == 1
+        assert mask_01.shape[0] == 1
+        masked = imputer(ref[0].cpu(),mask_01[0,0].cpu())
+        masked = masked[None,...]
+        #p47()
+        pass
+    else:
+        p47()
     return masked,perturbation
 
 def run_deletion_game(model,ref,target_id,
 mask,ratios_retained,batch_size=dutils.TODO,
     perturbation = elp_masking.BLUR_PERTURBATION,
+    max_blur=20,
+    imputation ='blur',
 ):
     device = ref.device
     ratios_retained = torch.tensor(ratios_retained,device=device)
@@ -55,7 +75,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
     mask_01 = (mask <= cutoff_values[:,None,None,None] ).float()
     #=================================================================
     for i,ratio_retained in enumerate(ratios_retained):
-        deleted_ref, perturbation= delete(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation)
+        deleted_ref, perturbation= delete(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
         deleted_images[i:i+1] = deleted_ref
 
     #dutils.img_save(deleted_images[i:i+1],'deleted.png')
@@ -103,6 +123,8 @@ def main():
     parser.add_argument("--results_root_dir",type=str,default=RESULTS_ROOT_DIR)
     parser.add_argument("--save_root_dir",type=str,default=METRICS_ROOT_DIR)
     parser.add_argument("--batch_size",type=int,default=32)
+    parser.add_argument("--max_blur",type=float,default=20)
+    parser.add_argument("--imputation",type=str,default='blur',choices=['blur','road'])
     parser.add_argument("--add-to-results-xz",type=lambda t:t.lower() == 'true',default=False,dest="add_to_results_xz")
     args = parser.parse_args()
     #"""
@@ -117,20 +139,26 @@ def main():
     if not args.add_to_results_xz:
         run(**vars(args))
     else:
+        #dutils.pause()
         add_to_results_xz(**vars(args))
 def add_to_results_xz(method=dutils.TODO,
             arch=dutils.TODO,
             dataset=dutils.TODO,
             results_root_dir=dutils.TODO,
+            imputation = 'blur',
             **kwargs,
 ):
+    #p45()
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
     methoddir = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}')
     resultpattern = os.path.join(methoddir,'*','*.xz') 
     resultsxzfiles = glob.glob(resultpattern)
 
-    metrics_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}")
+    if imputation == 'blur':
+        metrics_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}")
+    else:
+        metrics_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}-{imputation}")
     metricpattern = os.path.join(metrics_dir,'*','*.xz') 
     metricsxzfiles = glob.glob(metricpattern)
     # xzfiles = list(sorted(glob.glob(os.path.join(methoddir,'*','*.xz'))))
@@ -150,7 +178,9 @@ def add_to_results_xz(method=dutils.TODO,
         result['insertion'] = metric['insertion']
         result['deletion'] = metric['deletion']
         stub = os.path.basename(resultxzfile)
-        new_resultsfile = os.path.join(methoddir,stub)
+        imroot = os.path.basename(os.path.dirname(resultxzfile))
+        new_resultsfile = os.path.join(methoddir,imroot,stub)
+        #p46()
         with lzma.open(new_resultsfile,'wb') as f:
             pickle.dump(result,f)
         with lzma.open(new_resultsfile,'rb') as f:
@@ -159,12 +189,12 @@ def add_to_results_xz(method=dutils.TODO,
         assert set(reloaded['insertion'].keys()) == set(small_loaded['insertion'].keys())
         assert set(reloaded['deletion'].keys()) == set(small_loaded['deletion'].keys())
         #dutils.pause()
-    
-    pass
 def run(method=dutils.TODO,dataset=dutils.TODO,arch=dutils.TODO,
 results_root_dir=dutils.TODO,
 save_root_dir=dutils.TODO,
 batch_size = dutils.TODO,
+max_blur = dutils.TODO,
+imputation='blur',
 **ignore
 ):
     if len(ignore):
@@ -231,7 +261,10 @@ batch_size = dutils.TODO,
     #    dutils.pause()
     #    pass
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    save_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}")
+    if imputation == 'blur':
+        save_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}")
+    else:
+        save_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}-{imputation}")
 
     methoddir = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}')
     pattern = os.path.join(methoddir,'*','*.xz') 
@@ -281,9 +314,9 @@ batch_size = dutils.TODO,
         #dutils.img_save(saliency,"saliency.png")
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         results_insertion = run_deletion_game(model,ref,class_id,
-            1-saliency,ratios_retained,batch_size=batch_size)
+            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation)
         results_deletion = run_deletion_game(model,ref,class_id,
-           saliency,ratios_retained,batch_size=batch_size)
+           saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation)
         results = dict(
             insertion = results_insertion,
             deletion= results_deletion,
@@ -305,6 +338,7 @@ batch_size = dutils.TODO,
 
         print(savepath)
         #dutils.pause()
+        #p46()
         with lzma.open(savepath,'wb') as f:
             pickle.dump(results,f)
 
