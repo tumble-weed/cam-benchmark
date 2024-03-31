@@ -5,7 +5,9 @@ import cam_benchmark.elp_masking as elp_masking
 import cam_benchmark.road
 METRICS_ROOT_DIR="/root/bigfiles/other/metrics-torchray/"
 RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
-def delete(ref,mask,ratio_retained=None,
+#RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray/old_multi_results_mar4")
+#RESULTS_ROOT_DIR2 = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray2")
+def impute_where_0(ref,mask,ratio_retained=None,
 perturbation = elp_masking.BLUR_PERTURBATION,
 max_blur=20,
 imputation='blur',
@@ -20,7 +22,8 @@ imputation='blur',
         mask_01 = mask
     else:
         #masked = dutils.hardcode(masked = torch.zeros_like(ref))
-        sorted_mask_descending,argsort_descending = torch.sort(sorted_mask)
+        sorted_mask_descending,argsort_descending = torch.sort(mask.flatten(),descending=False)
+        dutils.note('this should be labeled _ascending right? confirm that same masks are made as in run_deletion_game')
         dutils.pause()
         cutoff_ix = int(len(sorted_mask_descending)*ratio_retained)
         cutoff_value = sorted_mask_descending[cutoff_ix]
@@ -47,6 +50,8 @@ imputation='blur',
         pass
     else:
         p47()
+    #dutils.img_save(masked,f'masked_{mask.sum()}.png')
+    pause2('DBG_METRICS_MAR6')
     return masked,perturbation
 
 def run_deletion_game(model,ref,target_id,
@@ -68,16 +73,41 @@ mask,ratios_retained,batch_size=dutils.TODO,
     #=================================================================
     assert mask.ndim == 4
     assert mask.shape[:2] == (1,1)
-    sorted_mask_descending,argsort_descending = torch.sort(mask.flatten())
-    cutoff_ixs = (len(sorted_mask_descending)*ratios_retained).long()
-    cutoff_ixs = torch.clamp(cutoff_ixs,0,len(sorted_mask_descending) - 1).long()
-    cutoff_values = sorted_mask_descending[cutoff_ixs]
-    mask_01 = (mask <= cutoff_values[:,None,None,None] ).float()
+    flat_mask = mask.flatten()
+    sorted_mask_ascending,argsort_ascending = torch.sort(flat_mask,descending=False)
+    _,unsort_ascending = torch.sort(argsort_ascending) 
+    cutoff_ixs = (len(sorted_mask_ascending)*ratios_retained).long()
+    
+    if False and 'old style with cutoff value':
+        cutoff_ixs = torch.clamp(cutoff_ixs,0,len(sorted_mask_ascending) - 1).long()
+        cutoff_values = sorted_mask_ascending[cutoff_ixs]
+        cutoff_values[ratios_retained==0] = cutoff_values[ratios_retained==0] - 1e-8
+        mask_01 = (mask <= cutoff_values[:,None,None,None] ).float()
+    if True and 'new style with cutoff ix':
+        # p47()
+        cutoff_ixs = torch.clamp(cutoff_ixs,0,len(sorted_mask_ascending)).long()
+        dummy_range = torch.arange(flat_mask.shape[0],device=flat_mask.device)
+        dummy_mask_01 = (dummy_range[None,:] < cutoff_ixs[:,None])
+        #p47()
+        pause2('DBG_METRICS_MAR6')
+        flat_mask_01 = dummy_mask_01[:,unsort_ascending]
+        mask_01 = flat_mask_01.view(cutoff_ixs.shape[0],*mask.shape[1:])
+        
+
+    #p47()
+    if True or (ratios_retained == 0).any():
+        assert mask_01[ratios_retained == 0].sum() == 0
+    if True or (ratios_retained == 1).any():
+        assert mask_01[ratios_retained == 1].sum() == np.prod(mask_01[0].shape)
     #=================================================================
     for i,ratio_retained in enumerate(ratios_retained):
-        deleted_ref, perturbation= delete(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
+        #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
+        pause2('DBG_METRICS_MAR6')
+        deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
         deleted_images[i:i+1] = deleted_ref
 
+    # for yy in [0,-1]:dutils.img_save(mask_01[yy],f'mask01_{yy}.png',vmin=0,vmax=1,cmap='gray',use_matplotlib=False)
+    # p47()
     #dutils.img_save(deleted_images[i:i+1],'deleted.png')
     #dutils.pause()
     assert deleted_images.shape[0] <= batch_size, 'implement batched forward'
@@ -103,6 +133,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
     probs = tensor_to_numpy(probs)
     diff_in_probs = tensor_to_numpy(diff_in_probs)
     ref_probs = tensor_to_numpy(ref_probs)
+    #p47()
     results = dict(
         probs = probs,
         ref_probs = ref_probs,
@@ -162,12 +193,14 @@ def add_to_results_xz(method=dutils.TODO,
     metricpattern = os.path.join(metrics_dir,'*','*.xz') 
     metricsxzfiles = glob.glob(metricpattern)
     # xzfiles = list(sorted(glob.glob(os.path.join(methoddir,'*','*.xz'))))
-    small_xzpath = "/root/bigfiles/other/results-torchray/mnist-grad_cam-resnet8/0/77.xz"
+    small_xzpath = os.path.join(RESULTS_ROOT_DIR,"mnist-grad_cam-resnet8/0/77.xz")
+#.............................................................
+    if False:
+        methoddir_new_results = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}_new_results')
+        with lzma.open(small_xzpath,'rb') as f:
+            small_loaded = pickle.load(f)
 
-    methoddir_new_results = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}_new_results')
-    with lzma.open(small_xzpath,'rb') as f:
-        small_loaded = pickle.load(f)
-
+#.............................................................
     for resultxzfile,metricxzfile in tqdm.tqdm(dutils.trunciter(zip(resultsxzfiles,metricsxzfiles),enabled=False,max_iter=10)):
         print(resultxzfile)
         print(metricxzfile)
@@ -185,9 +218,12 @@ def add_to_results_xz(method=dutils.TODO,
             pickle.dump(result,f)
         with lzma.open(new_resultsfile,'rb') as f:
             reloaded = pickle.load(f)
-        assert set(reloaded.keys()).intersection(set(small_loaded.keys())) == set(small_loaded.keys())
-        assert set(reloaded['insertion'].keys()) == set(small_loaded['insertion'].keys())
-        assert set(reloaded['deletion'].keys()) == set(small_loaded['deletion'].keys())
+#.............................................................
+        if False:
+            assert set(reloaded.keys()).intersection(set(small_loaded.keys())) == set(small_loaded.keys())
+            assert set(reloaded['insertion'].keys()) == set(small_loaded['insertion'].keys())
+            assert set(reloaded['deletion'].keys()) == set(small_loaded['deletion'].keys())
+#.............................................................
         #dutils.pause()
 def run(method=dutils.TODO,dataset=dutils.TODO,arch=dutils.TODO,
 results_root_dir=dutils.TODO,
@@ -195,11 +231,13 @@ save_root_dir=dutils.TODO,
 batch_size = dutils.TODO,
 max_blur = dutils.TODO,
 imputation='blur',
+ratios = dutils.TODO,
 **ignore
 ):
     if len(ignore):
         print(colorful.red(f'need toadd {ignore.keys()} to run arguments'))
-    ratios_retained = dutils.hardcode(ratios_retained=np.linspace(0,1,10))
+    #ratios_retained = dutils.hardcode(ratios_retained=np.linspace(0,1,10))
+    ratios_retained = ratios
     ratios_retained = np.array(ratios_retained)
     if not np.allclose((np.sort(ratios_retained ) - np.sort(1-ratios_retained)),np.zeros(ratios_retained.shape) ):
         dutils.pause()
@@ -216,6 +254,7 @@ imputation='blur',
             )
 # dutils.pause()
         model.to(device)
+        model.eval()
     #elif 'imagenet' in dataset:
     #    dutils.pause()
     #    pass
@@ -270,6 +309,7 @@ imputation='blur',
     pattern = os.path.join(methoddir,'*','*.xz') 
     xzfiles = glob.glob(pattern)
     # xzfiles = list(sorted(glob.glob(os.path.join(methoddir,'*','*.xz'))))
+    #p47()
     for xzfile in tqdm.tqdm(dutils.trunciter(xzfiles,enabled=False,max_iter=10)):
         print(xzfile)
         xzfile = os.path.abspath(xzfile)
@@ -313,10 +353,10 @@ imputation='blur',
         saliency = torch.nn.functional.interpolate(saliency,ref.shape[-2:],mode="bilinear")
         #dutils.img_save(saliency,"saliency.png")
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-        results_insertion = run_deletion_game(model,ref,class_id,
-            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation)
         results_deletion = run_deletion_game(model,ref,class_id,
            saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation)
+        results_insertion = run_deletion_game(model,ref,class_id,
+            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation)
         results = dict(
             insertion = results_insertion,
             deletion= results_deletion,
