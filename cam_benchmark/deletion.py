@@ -3,6 +3,7 @@ dutils.init()
 import glob
 import cam_benchmark.elp_masking as elp_masking
 import cam_benchmark.road
+import torchvision
 METRICS_ROOT_DIR="/root/bigfiles/other/metrics-torchray/"
 RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
 #RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray/old_multi_results_mar4")
@@ -59,10 +60,12 @@ mask,ratios_retained,batch_size=dutils.TODO,
     perturbation = elp_masking.BLUR_PERTURBATION,
     max_blur=20,
     imputation ='blur',
+    feat_layer = None,
 ):
     device = ref.device
     ratios_retained = torch.tensor(ratios_retained,device=device)
     deleted_images = torch.zeros((len(ratios_retained),) + ref.shape[1:],device=device)
+    # p46()
     ref_scores = model(ref)
     ref_probs = torch.softmax(ref_scores,dim=1)
     if ref_scores.ndim == 4:
@@ -70,6 +73,10 @@ mask,ratios_retained,batch_size=dutils.TODO,
         ref_probs = ref_probs.mean(dim=(-1,-2))
     ref_probs = ref_probs[:,target_id]
     ref_scores = ref_scores[:,target_id]
+    if feat_layer is not None:
+        ref_feats = feat_layer.feats
+        assert ref_feats.ndim == 2
+
     #=================================================================
     assert mask.ndim == 4
     assert mask.shape[:2] == (1,1)
@@ -113,65 +120,45 @@ mask,ratios_retained,batch_size=dutils.TODO,
     assert deleted_images.shape[0] <= batch_size, 'implement batched forward'
     with torch.inference_mode():
         scores = model(deleted_images)
-    probs = torch.softmax(scores,dim=1)
-    if scores.ndim == 4:
-        scores = scores.mean(dim=(-1,-2))
-        probs = probs.mean(dim=(-1,-2))
-    probs = probs[:,target_id]
-    scores = scores[:,target_id]
-    #dutils.note('check broadcasting of probs')
-    #dutils.pause();
-    assert probs.ndim == 1
-    diff_in_probs = probs - ref_probs
-    '''
-    # (1,20,1,1)
-    # (1,3,300,500) --> (1,20,2,5)
-    # (1,1000) 
-    '''
-    # model(deleted_ref)
-    # ref = dutils.hardcode(masked = torch.zeros_like(ref))
-    probs = tensor_to_numpy(probs)
-    diff_in_probs = tensor_to_numpy(diff_in_probs)
-    ref_probs = tensor_to_numpy(ref_probs)
-    #p47()
-    results = dict(
-        probs = probs,
-        ref_probs = ref_probs,
-        diff_in_probs = diff_in_probs,
-        ratios = ratios_retained,
+    if True:
+        probs = torch.softmax(scores,dim=1)
+        if scores.ndim == 4:
+            scores = scores.mean(dim=(-1,-2))
+            probs = probs.mean(dim=(-1,-2))
+        probs = probs[:,target_id]
+        scores = scores[:,target_id]
+        #dutils.note('check broadcasting of probs')
+        #dutils.pause();
+        assert probs.ndim == 1
+        diff_in_probs = probs - ref_probs
+        '''
+        # (1,20,1,1)
+        # (1,3,300,500) --> (1,20,2,5)
+        # (1,1000) 
+        '''
+        # model(deleted_ref)
+        # ref = dutils.hardcode(masked = torch.zeros_like(ref))
+        probs = tensor_to_numpy(probs)
+        diff_in_probs = tensor_to_numpy(diff_in_probs)
+        ref_probs = tensor_to_numpy(ref_probs)
+        #p47()
+        results = dict(
+            probs = probs,
+            ref_probs = ref_probs,
+            diff_in_probs = diff_in_probs,
+            ratios = ratios_retained,
+            imputation = imputation,
+        )
+    if feat_layer is not None:
+        feats = feat_layer.feats
+        assert feats.ndim == 2
+        feat_distance = ((feats - ref_feats)**2).sum(dim=-1)
+        feat_distance = tensor_to_numpy(feat_distance)
+        results['feat_distance'] = feat_distance
 
-    )
     #dutils.pause()
     return results
     #pass
-def main():
-    #"""
-    parser = argparse.ArgumentParser() 
-    parser.add_argument("--method",type=str)
-    parser.add_argument("--arch",type=str)
-    parser.add_argument("--dataset",type=str)
-    parser.add_argument("--ratios",type=float,nargs="*")
-    parser.add_argument("--results_root_dir",type=str,default=RESULTS_ROOT_DIR)
-    parser.add_argument("--save_root_dir",type=str,default=METRICS_ROOT_DIR)
-    parser.add_argument("--batch_size",type=int,default=32)
-    parser.add_argument("--max_blur",type=float,default=20)
-    parser.add_argument("--imputation",type=str,default='blur',choices=['blur','road'])
-    parser.add_argument("--add-to-results-xz",type=lambda t:t.lower() == 'true',default=False,dest="add_to_results_xz")
-    args = parser.parse_args()
-    #"""
-    #args = argparse.Namespace()
-    #args.batch_size = 32
-    #args.method = dutils.hardcode(method = "extremal_perturbation")
-    #args.arch = dutils.hardcode(arch= "resnet50")
-    #args.dataset = dutils.hardcode(dataset= "voc_2007")
-    #args.results_root_dir = dutils.hardcode(results_root_dir=RESULTS_ROOT_DIR)
-    #args.save_root_dir = dutils.hardcode(save_root_dir=METRICS_ROOT_DIR)
-    # python cam_benchmark.deletion --method grad_cam --arch vgg16 --dataset imagenet-5000 --ratios 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 
-    if not args.add_to_results_xz:
-        run(**vars(args))
-    else:
-        #dutils.pause()
-        add_to_results_xz(**vars(args))
 def add_to_results_xz(method=dutils.TODO,
             arch=dutils.TODO,
             dataset=dutils.TODO,
@@ -232,6 +219,8 @@ batch_size = dutils.TODO,
 max_blur = dutils.TODO,
 imputation='blur',
 ratios = dutils.TODO,
+start = 0,
+feat_layer = None,
 **ignore
 ):
     if len(ignore):
@@ -296,6 +285,11 @@ ratios = dutils.TODO,
                             transform=transform,
                             download=False,
                             limiter=None)
+    if feat_layer is not dutils.TODO:
+        from multithresh_saliency.run_self_saliency import get_layernames
+        feat_layers,layer_names = get_layernames(network=arch,model=model)
+        feat_layer = feat_layers[layer_names.index(feat_layer)]
+        p46()
     #elif 'imagenet' in dataset:
     #    dutils.pause()
     #    pass
@@ -308,8 +302,11 @@ ratios = dutils.TODO,
     methoddir = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}')
     pattern = os.path.join(methoddir,'*','*.xz') 
     xzfiles = glob.glob(pattern)
+    assert len(xzfiles), f'xzfiles is empty, {methoddir}'
+    #p46()
+    xzfiles = xzfiles[start:]
     # xzfiles = list(sorted(glob.glob(os.path.join(methoddir,'*','*.xz'))))
-    #p47()
+    # p47()
     for xzfile in tqdm.tqdm(dutils.trunciter(xzfiles,enabled=False,max_iter=10)):
         print(xzfile)
         xzfile = os.path.abspath(xzfile)
@@ -333,7 +330,7 @@ ratios = dutils.TODO,
             with lzma.open(xzfile,'rb') as f:
                 loaded = pickle.load(f)
         except Exception:
-            print(f'{xzpath} is corrupt')
+            print(f'{xzfile} is corrupt')
             # dutils.pause()
             continue
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
@@ -354,9 +351,9 @@ ratios = dutils.TODO,
         #dutils.img_save(saliency,"saliency.png")
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         results_deletion = run_deletion_game(model,ref,class_id,
-           saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation)
+           saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer)
         results_insertion = run_deletion_game(model,ref,class_id,
-            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation)
+            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer)
         results = dict(
             insertion = results_insertion,
             deletion= results_deletion,
@@ -378,7 +375,7 @@ ratios = dutils.TODO,
 
         print(savepath)
         #dutils.pause()
-        #p46()
+        # p46()
         with lzma.open(savepath,'wb') as f:
             pickle.dump(results,f)
 
@@ -389,7 +386,38 @@ ratios = dutils.TODO,
     <parent-directory>/000002/car6.xz
     '''
     pass
-import torchvision
+
+def main():
+    #"""
+    parser = argparse.ArgumentParser() 
+    parser.add_argument("--method",type=str)
+    parser.add_argument("--arch",type=str)
+    parser.add_argument("--dataset",type=str)
+    parser.add_argument("--ratios",type=float,nargs="*")
+    parser.add_argument("--results_root_dir",type=str,default=RESULTS_ROOT_DIR)
+    parser.add_argument("--save_root_dir",type=str,default=METRICS_ROOT_DIR)
+    parser.add_argument("--batch_size",type=int,default=32)
+    parser.add_argument("--max_blur",type=float,default=20)
+    parser.add_argument("--imputation",type=str,default='blur',choices=['blur','road'])
+    parser.add_argument("--add-to-results-xz",type=lambda t:t.lower() == 'true',default=False,dest="add_to_results_xz")
+    parser.add_argument("--start",type=int,default=0)
+    args = parser.parse_args()
+    #"""
+    #args = argparse.Namespace()
+    #args.batch_size = 32
+    #args.method = dutils.hardcode(method = "extremal_perturbation")
+    #args.arch = dutils.hardcode(arch= "resnet50")
+    #args.dataset = dutils.hardcode(dataset= "voc_2007")
+    #args.results_root_dir = dutils.hardcode(results_root_dir=RESULTS_ROOT_DIR)
+    #args.save_root_dir = dutils.hardcode(save_root_dir=METRICS_ROOT_DIR)
+    # python cam_benchmark.deletion --method grad_cam --arch vgg16 --dataset imagenet-5000 --ratios 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 
+    # p46()
+    if not args.add_to_results_xz:
+        run(**vars(args))
+    else:
+        #dutils.pause()
+        add_to_results_xz(**vars(args))
+
 if __name__ == '__main__':
     main()
     pass
