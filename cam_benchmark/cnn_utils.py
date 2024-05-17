@@ -111,14 +111,22 @@ def get_model(dataset,modelname,is_relevancecam,device=None):
         #    model = torchvision.models.vgg16(pretrained=True).to(device)
         # else:
         # dutils.pause()
-        if True:
-            import cam_benchmark.libre_cam_models.relevance.vgg
-            import cam_benchmark.libre_cam_models.relevance.resnet
-            # import ipdb;ipdb.set_trace()
-            if modelname == 'vgg16':
-                model = cam_benchmark.libre_cam_models.relevance.vgg.vgg16_bn(pretrained = True).to(device)
-            else:
-                model = cam_benchmark.libre_cam_models.relevance.resnet.resnet50(pretrained = True).to(device)                    
+
+        import cam_benchmark.libre_cam_models.relevance.vgg
+        import cam_benchmark.libre_cam_models.relevance.resnet
+        # import ipdb;ipdb.set_trace()
+        if modelname == 'vgg16':
+            #model = cam_benchmark.libre_cam_models.relevance.vgg.vgg16_bn(pretrained = True).to(device)
+            model = cam_benchmark.libre_cam_models.relevance.vgg.vgg16(pretrained = True).to(device)
+        elif modelname == 'resnet50':
+            model = cam_benchmark.libre_cam_models.relevance.resnet.resnet50(pretrained = True).to(device)                    
+        elif modelname == 'inceptionv3':
+            # model = torchvision.models.inception.Inception3(pretrained=True).to(device)
+            model = torch.hub.load('pytorch/vision:v0.10.0', 'inception_v3', pretrained=True).to(device)
+            p46()
+        else:
+            print(f'{modelname} not recognized')
+            p46()
     elif dataset in ['voc','pascal']:
         dataset = 'voc'
         from benchmark.architectures import get_model as get_model_
