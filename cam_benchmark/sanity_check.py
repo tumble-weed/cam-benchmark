@@ -145,7 +145,6 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
     
     return cascade_sanity_results
     
-    
 def run_and_save_sanity_check(ref,target,run_method,method,dataset,arch,imroot,im_np,device='cuda',
 save_dir = dutils.TODO,
 ):
@@ -175,6 +174,7 @@ save_dir = dutils.TODO,
 def dummy_attribution(model,ref,target):
     return torch.zeros(1,1,224,224,device=ref.device)
 
+#=========================================================================================
 import torchray.attribution.extremal_perturbation_variants as  extremal_perturbation_variants
 def get_wrapper_for_extremal_perturbation(method,dataset,method_kwargs):
     def wrapper_for_extremal_perturbation(model,ref,target):
@@ -208,6 +208,7 @@ def get_wrapper_for_extremal_perturbation(method,dataset,method_kwargs):
             return info['saliency']
     return wrapper_for_extremal_perturbation
 
+#=========================================================================================
 def get_wrapper_for_extremal_perturbation_with_simple_scale_and_crop_with_gp(method,dataset,method_kwargs):
     def wrapper_for_extremal_perturbation_with_simple_scale_and_crop_with_gp(model,ref,target):
         if True:
@@ -244,6 +245,78 @@ def get_wrapper_for_extremal_perturbation_with_simple_scale_and_crop_with_gp(met
             return info['saliency']
     return wrapper_for_extremal_perturbation
 
+#=========================================================================================
+def get_wrapper_for_multithresh_saliency(method,dataset,method_kwargs):
+    def wrapper_for_multithresh_saliency(model,ref,target):
+        method_kwargs = {}
+        from multithresh_saliency.multithresh_saliency_ import main
+        ##................................
+        #args.network = dutils.TODO
+        #args.layer = dutils.TODO
+        ref2 = dutils.TODO
+        feat_layer = dutils.TODO
+        ##detransform = dutils.TODO
+        detransform = None
+        ## args.epochs= dutils.hardcode(epochs = 10)
+        ##................................
+        from multithresh_saliency.wrapper_for_torchray import get_settings
+        args = get_settings(dataset)
+        pause2('DBG_PARSE_APR1')
+        args.target_class = target
+        args.class_id = target
+        ##................................
+        args.game_type = 'both'
+        #args.n_areas = 20
+        #args.max_blur = 20
+        ##................................
+        #if os.environ.get('USE_EARLY_STOPPING',False) == '1':
+        #    args.use_early_stopping = True
+        #if os.environ.get('GAME_TYPE',False):
+        #    args.game_type = os.environ['GAME_TYPE']
+        #if os.environ.get('N_AREAS',False):
+        #    args.n_areas = int(os.environ['N_AREAS'])
+        info = main(ref, model=model, 
+            feat_layer = feat_layer,
+            ref2 = ref2,
+            detransform = detransform,
+            **vars(args),
+            # network=args.network,layer=args.layer, 
+            # alpha=args.alpha, beta=args.beta, alpha_lambda=args.alpha_lambda, 
+            # tv_lambda=args.tv_lambda, epochs=args.epochs,
+            # learning_rate=args.learning_rate, momentum=args.momentum, 
+            # print_iter=args.print_iter, decay_iter=args.decay_iter,
+            # decay_factor=args.decay_factor, 
+            # device=args.device,method=args.method,
+            # target_class= args.target_class,
+            # dataset = args.dataset,
+            
+            # mode = args.mode,
+            
+            # n_areas = args.n_areas,
+            # window_size = args.window_size,
+            # UTILIZE_T_GRAD = args.UTILIZE_T_GRAD,
+            # rng_state = args.rng_state,
+            # perturbation = args.perturbation,
+            # pre_mask_generator_type = args.pre_mask_generator_type,
+            )        
+        saliency = info['max_of_smooth_mask']
+        # make saliency as an numpy array whose max is 1 and min is 0
+        # saliency [0.1, -11, 43, 0.0001]
+        pause2('DBG_MULTI_SANITY_APR1')  
+        if saliency.min() != saliency.max():
+            saliency1 = saliency - saliency.min()
+            #  [0.1 - -11, -11 - -11, 43 - -11,0.0001 - -11]
+            #  [11.1, 0, 54, 11.0001]
+            #  [11./54, 0/54,54/54,11.0001/54]
+            #  [0.2,0,1,0.2]
+            saliency1 = saliency1/saliency1.max()
+        else:
+            saliency1 = (saliency+1)/(1+saliency.max())
+        pause2('DBG_MULTI_SANITY_APR1')  
+        saliency = saliency1
+        return saliency #info['max_of_smooth_mask']
+    return wrapper_for_multithresh_saliency
+#=========================================================================================
 def main(method,dataset,arch,imroot,target,device='cuda'):
     dutils.note('pass device')
     #metrics_root_dir = '/root/bigfiles/other/results-torchray'
@@ -309,8 +382,19 @@ def main(method,dataset,arch,imroot,target,device='cuda'):
         method_kwargs = {'areas':[0.1],'smooth':0 }
         run_method = get_wrapper_for_extremal_perturbation(method,dataset,method_kwargs)
         # pass
+    elif method.startswith('multithresh_saliency'):
+        # run_method = dutils.hardcode(run_method = lambda *args,**kwargs:torch.zeros(1,1,224,224,device=device))
+        # wrapper_for_extremal_perturbation
+        #method_kwargs = {'areas':[0.025],'smooth':0 }
+        #method_kwargs = {'areas':[0.1],'smooth':0 }
+        method_kwargs = {}
+        run_method = get_wrapper_for_multithresh_saliency(method,dataset,method_kwargs)
+        # pass
     elif method == 'dummy1':
         run_method = dummy_attribution
+    else:
+        print(f'{method} not found')
+        p47()
     dutils.note('extremal_perturbation...gp, multithresh_saliency')
     run_and_save_sanity_check(ref,target,run_method,method,dataset,arch,imroot,im_np,device=device,save_dir=ROOT_DIR_FOR_SAVE)
     # dutils.pause()
@@ -351,7 +435,9 @@ def test():
     parser.add_argument('--imroot',type=str,default='000002.jpg')
     parser.add_argument('--target',type=int,default=18)
     
-    args = parser.parse_args()
+    args,unknown_argv = parser.parse_known_args()
+    del sys.argv[1:]
+    sys.argv.extend(unknown_argv)
     main(args.method,args.dataset,args.arch,args.imroot,args.target)
     # /root/evaluate-saliency-4/cam-benchmark/cam_benchmark/ILSVRC2012_val_00015410.JPEG , 13
     ############################################
