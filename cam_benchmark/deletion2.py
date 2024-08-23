@@ -50,7 +50,11 @@ imputation='blur',
         masked = masked[None,...]
         #p47()
         pass
+    elif imputation == 'zero':
+        masked = ref * mask_01
+
     else:
+        print(f'unknown imputation method {imputation}')
         p47()
     #dutils.img_save(masked,f'masked_{mask.sum()}.png')
     pause2('DBG_METRICS_MAR6')
@@ -62,7 +66,19 @@ mask,ratios_retained,batch_size=dutils.TODO,
     max_blur=20,
     imputation ='blur',
     feat_layer = None,
+    experiment = ['class','feat','channel'],
+    feat_layer_name = None,
 ):
+    if experiment == 'channel':
+        assert feat_layer is not None
+        assert feat_layer_name is not None
+        with torch.inference_mode():
+            _ = model(ref)
+            ref_feats = feat_layer.feats.detach().clone()
+        ref = ref_feats
+        from cam_benchmark.cnn_utils import keep_after
+        model = keep_after(model,feat_layer_name)
+    
     device = ref.device
     ratios_retained = torch.tensor(ratios_retained,device=device)
     deleted_images = torch.zeros((len(ratios_retained),) + ref.shape[1:],device=device)
@@ -79,8 +95,12 @@ mask,ratios_retained,batch_size=dutils.TODO,
         assert ref_feats.ndim == 2
 
     #=================================================================
-    assert mask.ndim == 4
-    assert mask.shape[:2] == (1,1)
+    if experiment == 'channel': 
+        assert mask.ndim == 2
+        assert mask.shape[0] == 1
+    else:
+        assert mask.ndim == 4
+        assert mask.shape[:2] == (1,1)
     flat_mask = mask.flatten()
     sorted_mask_ascending,argsort_ascending = torch.sort(flat_mask,descending=False)
     _,unsort_ascending = torch.sort(argsort_ascending) 
@@ -107,12 +127,16 @@ mask,ratios_retained,batch_size=dutils.TODO,
         assert mask_01[ratios_retained == 0].sum() == 0
     if True or (ratios_retained == 1).any():
         assert mask_01[ratios_retained == 1].sum() == np.prod(mask_01[0].shape)
+    if experiment == 'channel':
+        mask_01 = mask_01[...,None,None]
     #=================================================================
     for i,ratio_retained in enumerate(ratios_retained):
         #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
         pause2('DBG_METRICS_MAR6')
         deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
         deleted_images[i:i+1] = deleted_ref
+        if experiment == 'channel':
+            p46()
 
     # for yy in [0,-1]:dutils.img_save(mask_01[yy],f'mask01_{yy}.png',vmin=0,vmax=1,cmap='gray',use_matplotlib=False)
     # p47()
@@ -151,11 +175,13 @@ mask,ratios_retained,batch_size=dutils.TODO,
             imputation = imputation,
         )
     if feat_layer is not None:
-        feats = feat_layer.feats
-        assert feats.ndim == 2
-        feat_distance = ((feats - ref_feats)**2).sum(dim=-1)
-        feat_distance = tensor_to_numpy(feat_distance)
-        results['feat_distance'] = feat_distance
+        #if experiment == 'feat':
+        if experiment == 'channel':
+            feats = feat_layer.feats
+            assert feats.ndim == 2
+            feat_distance = ((feats - ref_feats)**2).sum(dim=-1)
+            feat_distance = tensor_to_numpy(feat_distance)
+            results['feat_distance'] = feat_distance
 
     #dutils.pause()
     return results
@@ -223,8 +249,11 @@ ratios = dutils.TODO,
 start = 0,
 feat_layer = None,
 device = dutils.hardcode(device="cuda"),
+experiment = 'class',
 **ignore
 ):
+    p46()
+    feat_layer_name = feat_layer
     if len(ignore):
         print(colorful.red(f'need toadd {ignore.keys()} to run arguments'))
     #ratios_retained = dutils.hardcode(ratios_retained=np.linspace(0,1,10))
@@ -356,9 +385,9 @@ device = dutils.hardcode(device="cuda"),
         #dutils.img_save(saliency,"saliency.png")
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         results_deletion = run_deletion_game(model,ref,class_id,
-           saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer)
+           saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer,feat_layer_name=feat_layer_name)
         results_insertion = run_deletion_game(model,ref,class_id,
-            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer)
+            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer,feat_layer_name=feat_layer_name)
         results = dict(
             insertion = results_insertion,
             deletion= results_deletion,
@@ -408,10 +437,12 @@ def main():
     parser.add_argument("--save_root_dir",type=str,default=METRICS_ROOT_DIR)
     parser.add_argument("--batch_size",type=int,default=32)
     parser.add_argument("--max_blur",type=float,default=20)
-    parser.add_argument("--imputation",type=str,default='blur',choices=['blur','road'])
+    parser.add_argument("--imputation",type=str,default='blur',choices=['blur','road','zero'])
     parser.add_argument("--add-to-results-xz",type=lambda t:t.lower() == 'true',default=False,dest="add_to_results_xz")
     parser.add_argument("--start",type=int,default=0)
+    parser.add_argument("--experiment",type=str,default='class',choices=['class','feat','channel'])
     args = parser.parse_args()
+    
     #"""
     #args = argparse.Namespace()
     #args.batch_size = 32
@@ -423,7 +454,7 @@ def main():
     # python cam_benchmark.deletion --method grad_cam --arch vgg16 --dataset imagenet-5000 --ratios 0.1 0.2 0.3 0.4 0.5 0.6 0.7 0.8 0.9 1.0 
     # p46()
     if wandb.run is None:
-       wandb.init(project=f"deletion-{args.dataset}-{args.method}-{args.arch}-{args.imputation}",config=dict(dataset=args.dataset,method=args.method,arch=args.arch,imputation=args.imputation,ratios=args.ratios))
+       wandb.init(project=f"deletion-{args.dataset}-{args.method}-{args.arch}-{args.imputation}",config=dict(dataset=args.dataset,method=args.method,arch=args.arch,imputation=args.imputation,ratios=args.ratios, experiment=args.experiment))
    
     if not args.add_to_results_xz:
         run(**vars(args))
