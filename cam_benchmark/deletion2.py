@@ -69,19 +69,20 @@ mask,ratios_retained,batch_size=dutils.TODO,
     experiment = ['class','feat','channel'],
     feat_layer_name = None,
 ):
+    device = ref.device
+    ref_input = ref
     if experiment == 'channel':
-        assert feat_layer is not None
-        assert feat_layer_name is not None
+        assert feat_layer is not None, "need to provide feat_layer for channel experiment"
+        assert feat_layer_name is not None, "need to provide feat_layer_name for channel experiment"    
         with torch.inference_mode():
             _ = model(ref)
             ref_feats = feat_layer.feats.detach().clone()
-        ref = ref_feats
+        ref_input = ref_feats
         from cam_benchmark.cnn_utils import keep_after
         model = keep_after(model,feat_layer_name)
     
-    device = ref.device
     ratios_retained = torch.tensor(ratios_retained,device=device)
-    deleted_images = torch.zeros((len(ratios_retained),) + ref.shape[1:],device=device)
+    deleted_input = torch.zeros((len(ratios_retained),) + ref_input.shape[1:],device=device)
     # p46()
     ref_scores = model(ref)
     ref_probs = torch.softmax(ref_scores,dim=1)
@@ -92,15 +93,15 @@ mask,ratios_retained,batch_size=dutils.TODO,
     ref_scores = ref_scores[:,target_id]
     if feat_layer is not None:
         ref_feats = feat_layer.feats
-        assert ref_feats.ndim == 2
+        assert ref_feats.ndim == 2, f'ref_feats dim {ref_feats.ndim}'
 
     #=================================================================
     if experiment == 'channel': 
-        assert mask.ndim == 2
-        assert mask.shape[0] == 1
+        assert mask.ndim == 2, f'mask dim {mask.ndim}'
+        assert mask.shape[0] == 1, f'mask shape {mask.shape}'
     else:
-        assert mask.ndim == 4
-        assert mask.shape[:2] == (1,1)
+        assert mask.ndim == 4, f'mask dim {mask.ndim}'
+        assert mask.shape[:2] == (1,1), f'mask shape {mask.shape}'
     flat_mask = mask.flatten()
     sorted_mask_ascending,argsort_ascending = torch.sort(flat_mask,descending=False)
     _,unsort_ascending = torch.sort(argsort_ascending) 
@@ -124,27 +125,39 @@ mask,ratios_retained,batch_size=dutils.TODO,
 
     #p47()
     if True or (ratios_retained == 0).any():
-        assert mask_01[ratios_retained == 0].sum() == 0
+        assert mask_01[ratios_retained == 0].sum() == 0, f'mask_01[ratios_retained == 0].sum() {mask_01[ratios_retained == 0].sum()}'
     if True or (ratios_retained == 1).any():
-        assert mask_01[ratios_retained == 1].sum() == np.prod(mask_01[0].shape)
+        assert mask_01[ratios_retained == 1].sum() == np.prod(mask_01[0].shape), f'mask_01[ratios_retained == 1].sum() {mask_01[ratios_retained == 1].sum()}'
     if experiment == 'channel':
-        mask_01 = mask_01[...,None,None]
+        if ref_input.ndim > mask_01.ndim:
+            for _ in range(ref_input.ndim - mask_01.ndim):
+                mask_01 = mask_01[...,None]
     #=================================================================
-    for i,ratio_retained in enumerate(ratios_retained):
-        #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
-        pause2('DBG_METRICS_MAR6')
-        deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
-        deleted_images[i:i+1] = deleted_ref
-        if experiment == 'channel':
+    if experiment == 'channel':
+        def masking_hook(m,i,o):
+            assert imputation == 'zero', 'only zero imputation is supported for channel experiment'
+            o = mask_01 * o
             p46()
-
-    # for yy in [0,-1]:dutils.img_save(mask_01[yy],f'mask01_{yy}.png',vmin=0,vmax=1,cmap='gray',use_matplotlib=False)
-    # p47()
-    #dutils.img_save(deleted_images[i:i+1],'deleted.png')
-    #dutils.pause()
-    assert deleted_images.shape[0] <= batch_size, 'implement batched forward'
-    with torch.inference_mode():
-        scores = model(deleted_images)
+            return o
+        hook = feat_layer.register_forward_hook(masking_hook)
+        with torch.inference_mode():
+            # repeat or expand dimension 0
+            scores = model(ref_input.repeat(len(ratios_retained)))
+        hook.remove()
+        p46()
+    else:
+        for i,ratio_retained in enumerate(ratios_retained):
+            #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
+            pause2('DBG_METRICS_MAR6')
+            deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
+            deleted_input[i:i+1] = deleted_ref
+        # for yy in [0,-1]:dutils.img_save(mask_01[yy],f'mask01_{yy}.png',vmin=0,vmax=1,cmap='gray',use_matplotlib=False)
+        # p47()
+        #dutils.img_save(deleted_input[i:i+1],'deleted.png')
+        #dutils.pause()
+        assert deleted_input.shape[0] <= batch_size, 'implement batched forward'
+        with torch.inference_mode():
+            scores = model(deleted_input)
     if True:
         probs = torch.softmax(scores,dim=1)
         if scores.ndim == 4:
@@ -154,7 +167,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
         scores = scores[:,target_id]
         #dutils.note('check broadcasting of probs')
         #dutils.pause();
-        assert probs.ndim == 1
+        assert probs.ndim == 1, f'probs.ndim {probs.ndim}'
         diff_in_probs = probs - ref_probs
         '''
         # (1,20,1,1)
@@ -178,7 +191,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
         #if experiment == 'feat':
         if experiment == 'channel':
             feats = feat_layer.feats
-            assert feats.ndim == 2
+            assert feats.ndim == 2, f'feats dim {feats.ndim}'
             feat_distance = ((feats - ref_feats)**2).sum(dim=-1)
             feat_distance = tensor_to_numpy(feat_distance)
             results['feat_distance'] = feat_distance
