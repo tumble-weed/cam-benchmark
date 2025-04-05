@@ -1,10 +1,22 @@
 import dutils
-dutils.init()
+from dutils import p46,p47,pause,pause2,tensor_to_numpy
+import torch
+import os
+import numpy as np
+import lzma
+import pickle
+import colorful
+import tqdm
+import argparse
+# dutils.init()
 import glob
 import cam_benchmark.elp_masking as elp_masking
 import cam_benchmark.road
-import torchvision
+# import torchvision
 import wandb
+from torchray.benchmark.models import get_model, get_transform
+from torchray.benchmark.models import get_transform
+from torchray.benchmark.datasets import get_dataset
 METRICS_ROOT_DIR="/root/bigfiles/other/metrics-torchray/"
 RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
 #RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray/old_multi_results_mar4")
@@ -42,13 +54,14 @@ imputation='blur',
                                 max_blur=max_blur,
                                 smooth=0)    
     elif imputation == 'road':
+
         imputer = cam_benchmark.road.NoisyLinearImputer()
         #imputer.to(ref.device)
         assert ref.shape[0] == 1
         assert mask_01.shape[0] == 1
         masked = imputer(ref[0].cpu(),mask_01[0,0].cpu())
         masked = masked[None,...]
-        #p47()
+
         pass
     else:
         p47()
@@ -66,7 +79,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
     device = ref.device
     ratios_retained = torch.tensor(ratios_retained,device=device)
     deleted_images = torch.zeros((len(ratios_retained),) + ref.shape[1:],device=device)
-    # p46()
+    
     ref_scores = model(ref)
     ref_probs = torch.softmax(ref_scores,dim=1)
     if ref_scores.ndim == 4:
@@ -85,7 +98,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
     sorted_mask_ascending,argsort_ascending = torch.sort(flat_mask,descending=False)
     _,unsort_ascending = torch.sort(argsort_ascending) 
     cutoff_ixs = (len(sorted_mask_ascending)*ratios_retained).long()
-    
+
     if False and 'old style with cutoff value':
         cutoff_ixs = torch.clamp(cutoff_ixs,0,len(sorted_mask_ascending) - 1).long()
         cutoff_values = sorted_mask_ascending[cutoff_ixs]
@@ -96,29 +109,44 @@ mask,ratios_retained,batch_size=dutils.TODO,
         cutoff_ixs = torch.clamp(cutoff_ixs,0,len(sorted_mask_ascending)).long()
         dummy_range = torch.arange(flat_mask.shape[0],device=flat_mask.device)
         dummy_mask_01 = (dummy_range[None,:] < cutoff_ixs[:,None])
-        #p47()
         pause2('DBG_METRICS_MAR6')
         flat_mask_01 = dummy_mask_01[:,unsort_ascending]
         mask_01 = flat_mask_01.view(cutoff_ixs.shape[0],*mask.shape[1:])
         
 
-    #p47()
     if True or (ratios_retained == 0).any():
         assert mask_01[ratios_retained == 0].sum() == 0
     if True or (ratios_retained == 1).any():
         assert mask_01[ratios_retained == 1].sum() == np.prod(mask_01[0].shape)
-    #=================================================================
-    for i,ratio_retained in enumerate(ratios_retained):
-        #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
-        pause2('DBG_METRICS_MAR6')
-        deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
-        deleted_images[i:i+1] = deleted_ref
 
+    #=================================================================
+    # if imputation == 'road':
+    #     from concurrent.futures import ProcessPoolExecutor
+    #     imputer = cam_benchmark.road.NoisyLinearImputer()
+    #     #imputer.to(ref.device)
+    #     assert ref.shape[0] == 1
+    #     # assert mask_01.shape[0] == 1
+    #     ref_ = ref.cpu()
+    #     mask_01_ = mask_01.cpu()
+    #     with ProcessPoolExecutor(max_workers=10) as e:
+    #         curried_impute_where_0 = lambda mask_01_:imputer(ref_[0],mask_01_[0])
+    #         masked = list(e.map(curried_impute_where_0,mask_01.unsqueeze(1)))
+    #         print(os.getpid(),'masked done')
+    #         # deleted_images = [pair[0] for pair in deleted_images_and_perturbation]
+    #         deleted_images = torch.tensor(masked,device=ref.device,dtype=ref.dtype)
+    # else:
+    if True:
+        for i,ratio_retained in enumerate(ratios_retained):
+            #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
+            pause2('DBG_METRICS_MAR6')
+            deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
+            deleted_images[i:i+1] = deleted_ref
     # for yy in [0,-1]:dutils.img_save(mask_01[yy],f'mask01_{yy}.png',vmin=0,vmax=1,cmap='gray',use_matplotlib=False)
     # p47()
     #dutils.img_save(deleted_images[i:i+1],'deleted.png')
     #dutils.pause()
     assert deleted_images.shape[0] <= batch_size, 'implement batched forward'
+    
     with torch.inference_mode():
         scores = model(deleted_images)
     if True:
@@ -156,10 +184,8 @@ mask,ratios_retained,batch_size=dutils.TODO,
         feat_distance = ((feats - ref_feats)**2).sum(dim=-1)
         feat_distance = tensor_to_numpy(feat_distance)
         results['feat_distance'] = feat_distance
-
-    #dutils.pause()
     return results
-    #pass
+
 def add_to_results_xz(method=dutils.TODO,
             arch=dutils.TODO,
             dataset=dutils.TODO,
@@ -236,10 +262,9 @@ device = dutils.hardcode(device="cuda"),
         if not torch.cuda.is_available():
             device = 'cpu'
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    #if dataset == 'voc_2007':
     if True:
 # model = dutils.hardcode(model = torchvision.models.vgg16(pretrained=True))
-        from torchray.benchmark.models import get_model, get_transform
+        
         model = get_model(
                 arch=arch,
                 dataset=dataset,
@@ -254,8 +279,7 @@ device = dutils.hardcode(device="cuda"),
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
     #if dataset == 'voc_2007':
         # ref = dutils.hardcode(ref = torch.zeros(1,3,224,224,device=device))
-        from torchray.benchmark.models import get_transform
-        from torchray.benchmark.datasets import get_dataset
+
         if dataset in ['voc_2007','coco']:
             if method == "rise":
                 input_size = (224, 224)
@@ -383,13 +407,12 @@ device = dutils.hardcode(device="cuda"),
         savepath = os.path.join(save_dir,imroot,classname_classid_xz)
 
         print(savepath)
-        #dutils.pause()
+        
         # p46()
         with lzma.open(savepath,'wb') as f:
             pickle.dump(results,f)
         wandb.log(dict(xzfile=xzfile),commit=False)
         wandb.log({})
-    #dutils.pause()
     '''
     <parent-directory>/000001/dog11.xz
     <parent-directory>/000001/person14.xz
@@ -432,5 +455,8 @@ def main():
         add_to_results_xz(**vars(args))
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.set_start_method("spawn")  # Ensures safe multiprocessing
+    import torch  # Import after setting spawn mode
     main()
     pass
