@@ -1,10 +1,23 @@
 import dutils
-dutils.init()
+from dutils import p46,p47,pause,pause2,tensor_to_numpy
+import torch
+import os
+import numpy as np
+import lzma
+import pickle
+import colorful
+import tqdm
+import argparse
+# dutils.init()
 import glob
 import cam_benchmark.elp_masking as elp_masking
 import cam_benchmark.road
 import torchvision
 import wandb
+from torchray.benchmark.models import get_model, get_transform
+from torchray.benchmark.models import get_transform
+from torchray.benchmark.datasets import get_dataset
+from multithresh_saliency.run_self_saliency import get_layernames
 METRICS_ROOT_DIR="/root/bigfiles/other/metrics-torchray/"
 RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
 #RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray/old_multi_results_mar4")
@@ -74,16 +87,21 @@ mask,ratios_retained,batch_size=dutils.TODO,
     if experiment == 'channel':
         assert feat_layer is not None, "need to provide feat_layer for channel experiment"
         assert feat_layer_name is not None, "need to provide feat_layer_name for channel experiment"    
+        assert model is not None, "need to provide model for channel experiment"
         with torch.inference_mode():
             _ = model(ref)
             ref_feats = feat_layer.feats.detach().clone()
         ref_input = ref_feats
-        from cam_benchmark.cnn_utils import keep_after
-        model = keep_after(model,feat_layer_name)
-    
+        #from cam_benchmark.cnn_utils import keep_after
+        #model = keep_after(model,feat_layer_name)
+        assert model is not None
+        if mask.ndim != ref_input.ndim:
+            if mask.ndim == 4 and ref_input.ndim == 2:
+                assert mask.shape[-2:] == (1,1)
+                mask = mask[...,0,0]
+
     ratios_retained = torch.tensor(ratios_retained,device=device)
     deleted_input = torch.zeros((len(ratios_retained),) + ref_input.shape[1:],device=device)
-    # p46()
     ref_scores = model(ref)
     ref_probs = torch.softmax(ref_scores,dim=1)
     if ref_scores.ndim == 4:
@@ -137,14 +155,14 @@ mask,ratios_retained,batch_size=dutils.TODO,
         def masking_hook(m,i,o):
             assert imputation == 'zero', 'only zero imputation is supported for channel experiment'
             o = mask_01 * o
-            p46()
+            #p46()
             return o
         hook = feat_layer.register_forward_hook(masking_hook)
         with torch.inference_mode():
             # repeat or expand dimension 0
-            scores = model(ref_input.repeat(len(ratios_retained)))
+            scores = model(ref.repeat(len(ratios_retained),1,1,1))
         hook.remove()
-        p46()
+        #p46()
     else:
         for i,ratio_retained in enumerate(ratios_retained):
             #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
@@ -155,9 +173,19 @@ mask,ratios_retained,batch_size=dutils.TODO,
         # p47()
         #dutils.img_save(deleted_input[i:i+1],'deleted.png')
         #dutils.pause()
-        assert deleted_input.shape[0] <= batch_size, 'implement batched forward'
+        #==================================================
+        #assert deleted_input.shape[0] <= batch_size, 'implement batched forward'
+        #def masking_hook(module, input, output):
+        #    #p46()
+        #    output  = deleted_input
+        #    return output        
+        #hook = feat_layer.register_forward_hook(masking_hook)
+        #==================================================
         with torch.inference_mode():
-            scores = model(deleted_input)
+            scores = model(ref)
+        #==================================================
+        #hook.remove()
+        #==================================================
     if True:
         probs = torch.softmax(scores,dim=1)
         if scores.ndim == 4:
@@ -165,6 +193,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
             probs = probs.mean(dim=(-1,-2))
         probs = probs[:,target_id]
         scores = scores[:,target_id]
+        #p46()
         #dutils.note('check broadcasting of probs')
         #dutils.pause();
         assert probs.ndim == 1, f'probs.ndim {probs.ndim}'
@@ -281,7 +310,6 @@ experiment = 'class',
     #if dataset == 'voc_2007':
     if True:
 # model = dutils.hardcode(model = torchvision.models.vgg16(pretrained=True))
-        from torchray.benchmark.models import get_model, get_transform
         model = get_model(
                 arch=arch,
                 dataset=dataset,
@@ -296,8 +324,6 @@ experiment = 'class',
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
     #if dataset == 'voc_2007':
         # ref = dutils.hardcode(ref = torch.zeros(1,3,224,224,device=device))
-        from torchray.benchmark.models import get_transform
-        from torchray.benchmark.datasets import get_dataset
         if dataset in ['voc_2007','coco']:
             if method == "rise":
                 input_size = (224, 224)
@@ -332,7 +358,6 @@ experiment = 'class',
                             download=False,
                             limiter=None)
     if feat_layer is not dutils.TODO:
-        from multithresh_saliency.run_self_saliency import get_layernames
         feat_layers,layer_names = get_layernames(network=arch,model=model)
         feat_layer = feat_layers[layer_names.index(feat_layer)]
         p46()
