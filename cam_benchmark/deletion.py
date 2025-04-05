@@ -15,7 +15,6 @@ import cam_benchmark.road
 # import torchvision
 import wandb
 from torchray.benchmark.models import get_model, get_transform
-from torchray.benchmark.models import get_transform
 from torchray.benchmark.datasets import get_dataset
 METRICS_ROOT_DIR="/root/bigfiles/other/metrics-torchray/"
 RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
@@ -239,6 +238,41 @@ def add_to_results_xz(method=dutils.TODO,
             assert set(reloaded['deletion'].keys()) == set(small_loaded['deletion'].keys())
 #.............................................................
         #dutils.pause()
+def get_data(method,dataset):
+    if dataset in ['voc_2007','coco']:
+        if method == "rise":
+            input_size = (224, 224)
+        else:
+            input_size = 224        
+    elif dataset in ['imagenet-5000']:
+        input_size = 224
+    elif dataset in ['cifar-10','cifar-100','mnist']:
+        input_size = (32,32)
+    else:
+        dutils.pause()
+    #subset = 'test'
+    if dataset == 'voc_2007':
+        subset = 'test'
+    elif dataset == 'coco':
+        subset = 'val2014'
+    elif dataset == 'imagenet-5000':
+        subset = 'val'
+    elif dataset in ['cifar-10','cifar-100']:
+        subset = 'val'
+    elif dataset in ['mnist']:
+        subset = 'val'
+    else:
+        assert False
+    
+    transform = get_transform(size=input_size,
+                                dataset=dataset)
+    
+    data = get_dataset(name=dataset,
+                        subset=subset,
+                        transform=transform,
+                        download=False,
+                        limiter=None)   
+    return data
 def run(method=dutils.TODO,dataset=dutils.TODO,arch=dutils.TODO,
 results_root_dir=dutils.TODO,
 save_root_dir=dutils.TODO,
@@ -273,46 +307,7 @@ device = dutils.hardcode(device="cuda"),
 # dutils.pause()
         model.to(device)
         model.eval()
-    #elif 'imagenet' in dataset:
-    #    dutils.pause()
-    #    pass
-    #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    #if dataset == 'voc_2007':
-        # ref = dutils.hardcode(ref = torch.zeros(1,3,224,224,device=device))
-
-        if dataset in ['voc_2007','coco']:
-            if method == "rise":
-                input_size = (224, 224)
-            else:
-                input_size = 224        
-        elif dataset in ['imagenet-5000']:
-            input_size = 224
-        elif dataset in ['cifar-10','cifar-100','mnist']:
-            input_size = (32,32)
-        else:
-            dutils.pause()
-        #subset = 'test'
-        if dataset == 'voc_2007':
-            subset = 'test'
-        elif dataset == 'coco':
-            subset = 'val2014'
-        elif dataset == 'imagenet-5000':
-            subset = 'val'
-        elif dataset in ['cifar-10','cifar-100']:
-            subset = 'val'
-        elif dataset in ['mnist']:
-            subset = 'val'
-        else:
-            assert False
-       
-        transform = get_transform(size=input_size,
-                                  dataset=dataset)
-        
-        data = get_dataset(name=dataset,
-                            subset=subset,
-                            transform=transform,
-                            download=False,
-                            limiter=None)
+        data = get_data(method,dataset)
     if feat_layer is not dutils.TODO:
         from multithresh_saliency.run_self_saliency import get_layernames
         feat_layers,layer_names = get_layernames(network=arch,model=model)
@@ -337,82 +332,18 @@ device = dutils.hardcode(device="cuda"),
     # p47()
     running_scores = {'insertion':[],'deletion':[]}
     for xzfile in tqdm.tqdm(dutils.trunciter(xzfiles,enabled=False,max_iter=10)):
-        print(xzfile)
-        xzfile = os.path.abspath(xzfile)
-        #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-        found = False
-        imroot = os.path.basename(os.path.dirname(xzfile))
-        #dutils.pause()
-        for imix,impath in enumerate(data.images):
-            if imroot in impath:
-                found = True
-                break
-        assert found
-        ref,y = data[imix]
-        ref = ref[None]
-        ref = ref.to(device)
-        # dutils.pause()
-        pass
-        #ref = dutils.hardcode(ref = torch.randn(1,3,224,224))
-        #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-        try:
-            with lzma.open(xzfile,'rb') as f:
-                loaded = pickle.load(f)
-        except Exception:
-            print(f'{xzfile} is corrupt')
-            # dutils.pause()
-            continue
-        #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-        class_id =loaded['class_id']
-        saliency = loaded['saliency']
-        '''
-        if saliency.max() > 1:
-            saliency = saliency/saliency.max()
-        '''
-        if saliency.max() > 0:
-            saliency = saliency/saliency.max()
-        assert saliency.max() <= 1.
-        assert saliency.min() >= 0
-        class_name = loaded['class_name']
-        assert saliency.ndim == 4
-        saliency = torch.tensor(saliency,device=ref.device)
-        saliency = torch.nn.functional.interpolate(saliency,ref.shape[-2:],mode="bilinear")
-        #dutils.img_save(saliency,"saliency.png")
-        #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-        results_deletion = run_deletion_game(model,ref,class_id,
-           saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer)
-        results_insertion = run_deletion_game(model,ref,class_id,
-            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer)
+        results_ = run_on_xzfile(xzfile,model,ratios_retained,imputation,max_blur,batch_size,feat_layer,data,device)
         results = dict(
-            insertion = results_insertion,
-            deletion= results_deletion,
-            arch = arch,
-            dataset = dataset,
-            method = method,
-            imroot = imroot,
-            class_name = class_name,
-            class_id = class_id,
-        )
-        running_scores['insertion'].append(results_insertion['probs'])
-        running_scores['deletion'].append(results_deletion['probs'])
-        wandb.log(dict(running_insertion_score = np.array(running_scores['insertion']).mean()),commit=False)
-        wandb.log(dict(running_deletion_score = np.array(running_scores['deletion']).mean()),commit=False)
-        # break
-        """
-        deletion/voc_2007-grad_cam-resnet50
-        """
-        classname_classid_xz  = os.path.basename(xzfile)
-        imroot = os.path.basename(os.path.dirname(xzfile))
-        os.makedirs(os.path.join(save_dir,imroot),exist_ok=True)
-        savepath = os.path.join(save_dir,imroot,classname_classid_xz)
-
-        print(savepath)
-        
-        # p46()
-        with lzma.open(savepath,'wb') as f:
-            pickle.dump(results,f)
-        wandb.log(dict(xzfile=xzfile),commit=False)
-        wandb.log({})
+                insertion = results_['results_insertion'],
+                deletion= results_['results_deletion'],
+                arch = arch,
+                dataset = dataset,
+                method = method,
+                imroot = results_['imroot'],
+                class_name = results_['class_name'],
+                class_id = results_['class_id'],
+            )
+        log_results(results,xzfile,save_dir,running_scores)
     '''
     <parent-directory>/000001/dog11.xz
     <parent-directory>/000001/person14.xz
@@ -420,6 +351,75 @@ device = dutils.hardcode(device="cuda"),
     '''
     pass
 
+def run_on_xzfile(xzfile,model,ratios_retained,imputation,max_blur,batch_size,feat_layer,data,device):        
+    print(xzfile)
+    xzfile = os.path.abspath(xzfile)
+    #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    found = False
+    imroot = os.path.basename(os.path.dirname(xzfile))
+    #dutils.pause()
+    for imix,impath in enumerate(data.images):
+        if imroot in impath:
+            found = True
+            break
+    assert found
+    ref,y = data[imix]
+    ref = ref[None]
+    ref = ref.to(device)
+    # dutils.pause()
+    pass
+    #ref = dutils.hardcode(ref = torch.randn(1,3,224,224))
+    #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    try:
+        with lzma.open(xzfile,'rb') as f:
+            loaded = pickle.load(f)
+    except Exception:
+        print(f'{xzfile} is corrupt')
+        # dutils.pause()
+        return None
+    #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    class_id =loaded['class_id']
+    saliency = loaded['saliency']
+    '''
+    if saliency.max() > 1:
+        saliency = saliency/saliency.max()
+    '''
+    if saliency.max() > 0:
+        saliency = saliency/saliency.max()
+    assert saliency.max() <= 1.
+    assert saliency.min() >= 0
+    class_name = loaded['class_name']
+    assert saliency.ndim == 4
+    saliency = torch.tensor(saliency,device=ref.device)
+    saliency = torch.nn.functional.interpolate(saliency,ref.shape[-2:],mode="bilinear")
+    #dutils.img_save(saliency,"saliency.png")
+    #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    results_deletion = run_deletion_game(model,ref,class_id,
+        saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer)
+    results_insertion = run_deletion_game(model,ref,class_id,
+        1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer)
+    return dict(results_insertion = results_insertion, results_deletion = results_deletion,imroot=imroot,class_name=class_name,class_id=class_id)
+def log_results(results,xzfile,save_dir,running_scores):
+    running_scores['insertion'].append(results['insertion']['probs'])
+    running_scores['deletion'].append(results['deletion']['probs'])
+    wandb.log(dict(running_insertion_score = np.array(running_scores['insertion']).mean()),commit=False)
+    wandb.log(dict(running_deletion_score = np.array(running_scores['deletion']).mean()),commit=False)
+    # break
+    """
+    deletion/voc_2007-grad_cam-resnet50
+    """
+    classname_classid_xz  = os.path.basename(xzfile)
+    imroot = os.path.basename(os.path.dirname(xzfile))
+    os.makedirs(os.path.join(save_dir,imroot),exist_ok=True)
+    savepath = os.path.join(save_dir,imroot,classname_classid_xz)
+
+    print(savepath)
+    
+    # p46()
+    with lzma.open(savepath,'wb') as f:
+        pickle.dump(results,f)
+    wandb.log(dict(xzfile=xzfile),commit=False)
+    wandb.log({})    
 def main():
     #"""
     parser = argparse.ArgumentParser() 
