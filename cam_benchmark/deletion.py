@@ -134,12 +134,41 @@ mask,ratios_retained,batch_size=dutils.TODO,
     #         # deleted_images = [pair[0] for pair in deleted_images_and_perturbation]
     #         deleted_images = torch.tensor(masked,device=ref.device,dtype=ref.dtype)
     # else:
-    if True:
-        for i,ratio_retained in enumerate(ratios_retained):
-            #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
-            pause2('DBG_METRICS_MAR6')
-            deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
-            deleted_images[i:i+1] = deleted_ref
+    
+    #................................................................
+    if imputation == 'road':
+        with dutils.Timer('concurrent-imputation') as timer:
+            import concurrent.futures
+
+            def process_mask(i,mask_01_i, ratio_retained):
+                pause2('DBG_METRICS_MAR6')
+                deleted_ref, perturbation_result = impute_where_0(
+                    ref,
+                    mask_01_i,
+                    ratio_retained=None,
+                    perturbation=perturbation,
+                    max_blur=max_blur,
+                    imputation=imputation
+                )
+                return i, deleted_ref, perturbation_result
+
+            # Run multithreaded
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                futures = [executor.submit(process_mask,i, mask_01[i:i+1], ratio_retained) for i, ratio_retained in enumerate(ratios_retained)]
+
+                for future in concurrent.futures.as_completed(futures):
+                    i, deleted_ref_result, perturbation_result = future.result()
+                    deleted_images[i:i+1] = deleted_ref_result
+                    perturbation = perturbation_result  # If `perturbation` must be shared, this line may need rethinking.
+    
+    else:
+        with dutils.Timer('looped-imputation') as timer0:    
+            for i,ratio_retained in enumerate(ratios_retained):
+                #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
+                pause2('DBG_METRICS_MAR6')
+                deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
+                deleted_images[i:i+1] = deleted_ref
+    #................................................................
     # for yy in [0,-1]:dutils.img_save(mask_01[yy],f'mask01_{yy}.png',vmin=0,vmax=1,cmap='gray',use_matplotlib=False)
     # p47()
     #dutils.img_save(deleted_images[i:i+1],'deleted.png')
