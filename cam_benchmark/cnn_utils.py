@@ -3,6 +3,52 @@ import torch
 import torchvision
 import skimage.io
 from PIL import Image
+import collections
+import torch.nn
+#............................................
+#............................................
+def remove_inplace_nonlin(model):
+    modules = [module for module in model.modules() if not isinstance(module, torch.nn.Sequential)]
+    for m in modules:
+        if hasattr(m,'inplace'):
+            print(str(m)+f'has inplace which is {m.inplace}')
+        m.inplace = False
+    
+
+#............................................
+def keep_till(model,feat_layer_str):
+    feat_layer_str_parts= feat_layer_str.split('.')
+    feat_layer_str_parts = (feat_layer_str_parts[0],'.'.join(feat_layer_str_parts[1:]))
+    kept_children = collections.OrderedDict()
+    for lstr,l in list(model.named_children()):
+        if lstr == feat_layer_str_parts[0]:
+            l = keep_till(l,feat_layer_str_parts[1])
+            kept_children[lstr] = l
+            break
+        else:
+            kept_children[lstr] = l
+    if len(kept_children) == 0:
+        return model
+    return torch.nn.Sequential(kept_children)
+#............................................
+def keep_after(model,feat_layer_str):
+    feat_layer_str_parts= feat_layer_str.split('.')
+    feat_layer_str_parts = (feat_layer_str_parts[0],'.'.join(feat_layer_str_parts[1:]))
+    kept_children = collections.OrderedDict()
+    keep = False
+    for lstr,l in list(model.named_children()):
+        if keep:
+            kept_children[lstr] = l
+        if lstr == feat_layer_str_parts[0]:
+            keep = True
+            l1 = keep_after(l,feat_layer_str_parts[1])
+            if l1 is not None:
+                kept_children[lstr] = l1
+    if len(kept_children) == 0:
+        return None
+    return torch.nn.Sequential(kept_children)
+
+
 ##############################################################################################
 
 pascal_bgr_mean = [103.939, 116.779, 123.68]
@@ -120,7 +166,7 @@ def get_model(dataset,modelname,is_relevancecam,device=None):
             model = cam_benchmark.libre_cam_models.relevance.vgg.vgg16(pretrained = True).to(device)
         elif modelname == 'resnet50':
             model = cam_benchmark.libre_cam_models.relevance.resnet.resnet50(pretrained = True).to(device)                    
-        elif modelname == 'inceptionv3':
+        elif modelname == 'inception_v3':
             # model = torchvision.models.inception.Inception3(pretrained=True).to(device)
             model = torch.hub.load('pytorch/vision:v0.10.0', 'inception_v3', pretrained=True).to(device)
             p46()
