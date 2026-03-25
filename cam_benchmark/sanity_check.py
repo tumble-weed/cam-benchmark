@@ -6,7 +6,7 @@ import torch.nn
 from PIL import Image
 from torchray.benchmark.models import get_transform
 from torchray.benchmark.datasets import get_dataset
-METRICS_ROOT_DIR = '/root/bigfiles/other/metrics-torchray' 
+METRICS_ROOT_DIR = '/data/bigfiles/other/metrics-torchray' 
 ROOT_DIR_FOR_SAVE= os.path.join(METRICS_ROOT_DIR,'sanity')
 os.makedirs(ROOT_DIR_FOR_SAVE,exist_ok=True)
 #..................................................
@@ -319,8 +319,8 @@ def get_wrapper_for_multithresh_saliency(method,dataset,method_kwargs):
 #=========================================================================================
 def main(method,dataset,arch,imroot,target,device='cuda'):
     dutils.note('pass device')
-    #metrics_root_dir = '/root/bigfiles/other/results-torchray'
-    # metrics_root_dir = '/root/bigfiles/other/metrics-torchray'
+    #metrics_root_dir = '/data/bigfiles/other/results-torchray'
+    # metrics_root_dir = '/data/bigfiles/other/metrics-torchray'
     imroot = os.path.splitext(os.path.basename(imroot))[0]
     if dataset == 'voc_2007':
         # ref = dutils.hardcode(ref = torch.zeros(1,3,224,224,device=device))
@@ -412,7 +412,7 @@ def test():
     args.imroot = '000001.jpg'
     # args.dataset = 'imagenet'
     
-    # args.impath = '/root/bigfiles/dataset/voc/VOCdevkit/VOCdevkit_2007/VOC2007/JPEGImages/000001.jpg'
+    # args.impath = '/data/bigfiles/dataset/voc/VOCdevkit/VOCdevkit_2007/VOC2007/JPEGImages/000001.jpg'
     args.target = 14
     dutils.note('check if target is valid for image')
     main(args.method,args.dataset,args.arch,args.imroot,args.target)
