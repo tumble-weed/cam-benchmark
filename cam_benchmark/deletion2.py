@@ -1,32 +1,43 @@
-import dutils
-from dutils import p46,p47,pause,pause2,tensor_to_numpy
-import torch
-import os
-import numpy as np
-import lzma
-import pickle
-import colorful
-import tqdm
+# import os
+# os.environ('CUBLAS_WORKSPACE_CONFIG',':4096:8')
 import argparse
+
 # dutils.init()
 import glob
+import lzma
+import os
+import pickle
+
+import colorful
+import dutils
+import numpy as np
+import torch
+import torchvision
+import tqdm
+from dutils import p46, p47, pause, pause2, tensor_to_numpy
+from torchray.benchmark.datasets import get_dataset
+from torchray.benchmark.models import get_model, get_transform
+import traceback
+# from multithresh_saliency.run_self_saliency import get_layernames
+import cam_benchmark.deletion
 import cam_benchmark.elp_masking as elp_masking
 import cam_benchmark.road
-import torchvision
 import wandb
-from torchray.benchmark.models import get_model, get_transform
-from torchray.benchmark.models import get_transform
-from torchray.benchmark.datasets import get_dataset
-from multithresh_saliency.run_self_saliency import get_layernames
-import cam_benchmark.deletion
-METRICS_ROOT_DIR="/root/bigfiles/other/metrics-torchray/"
-RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
-#RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray/old_multi_results_mar4")
-#RESULTS_ROOT_DIR2 = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray2")
+from cam_benchmark.cnn_utils import register_feat_hook
+
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+torch.use_deterministic_algorithms(True, warn_only=True)
+
+METRICS_ROOT_DIR="/data/bigfiles/other/metrics-torchray/"
+RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/data/bigfiles/other/results-torchray")
+#RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/data/bigfiles/other/results-torchray/old_multi_results_mar4")
+#RESULTS_ROOT_DIR2 = dutils.hardcode(RESULTS_ROOT_DIR="/data/bigfiles/other/results-torchray2")
 def impute_where_0(ref,mask,ratio_retained=None,
 perturbation = elp_masking.BLUR_PERTURBATION,
 max_blur=20,
 imputation='blur',
+generator=None,
 ):
     if ratio_retained is None:
         if not( all([
@@ -60,7 +71,7 @@ imputation='blur',
         #imputer.to(ref.device)
         assert ref.shape[0] == 1
         assert mask_01.shape[0] == 1
-        masked = imputer(ref[0].cpu(),mask_01[0,0].cpu())
+        masked = imputer(ref[0].cpu(),mask_01[0,0].cpu(), generator=generator)
         masked = masked[None,...]
         #p47()
         pass
@@ -80,7 +91,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
     max_blur=20,
     imputation ='blur',
     feat_layer = None,
-    experiment = ['class','feat','channel'],
+    experiment = ['class','feat','channel'][0],
     feat_layer_name = None,
 ):
     if experiment == 'channel':
@@ -119,11 +130,11 @@ mask,ratios_retained,batch_size=dutils.TODO,
     assert feat_layer_name is not None, "need to provide feat_layer_name for channel experiment"    
     assert model is not None, "need to provide model for channel experiment"
     with torch.inference_mode():
-        _ = model(ref)
-        ref_feats = feat_layer.feats.detach().clone()
+        with register_feat_hook(feat_layer) as ref_feats:
+            _ = model(ref)
+            ref_feats = ref_feats[0].detach().clone()
     ref_input = ref_feats
-    #from cam_benchmark.cnn_utils import keep_after
-    #model = keep_after(model,feat_layer_name)
+
     assert model is not None
     if mask.ndim != ref_input.ndim:
         if mask.ndim == 4 and ref_input.ndim == 2:
@@ -132,18 +143,18 @@ mask,ratios_retained,batch_size=dutils.TODO,
 
     ratios_retained = torch.tensor(ratios_retained,device=device)
     deleted_input = torch.zeros((len(ratios_retained),) + ref_input.shape[1:],device=device)
-    ref_scores = model(ref)
+    with register_feat_hook(feat_layer) as ref_feats_:
+        ref_scores = model(ref)
+        ref_feats = ref_feats_[0].detach().clone()
     ref_probs = torch.softmax(ref_scores,dim=1)
     if ref_scores.ndim == 4:
         ref_scores = ref_scores.mean(dim=(-1,-2))
         ref_probs = ref_probs.mean(dim=(-1,-2))
     ref_probs = ref_probs[:,target_id]
     ref_scores = ref_scores[:,target_id]
-    ref_feats = feat_layer.feats
-    assert ref_feats.ndim == 2, f'ref_feats dim {ref_feats.ndim}'
 
     #=================================================================
-    assert mask.ndim == 2, f'mask dim {mask.ndim}'
+    # assert mask.ndim == 2, f'mask dim {mask.ndim}'
     assert mask.shape[0] == 1, f'mask shape {mask.shape}'
     flat_mask = mask.flatten()
     sorted_mask_ascending,argsort_ascending = torch.sort(flat_mask,descending=False)
@@ -152,7 +163,7 @@ mask,ratios_retained,batch_size=dutils.TODO,
     
     cutoff_ixs = torch.clamp(cutoff_ixs,0,len(sorted_mask_ascending)).long()
     dummy_range = torch.arange(flat_mask.shape[0],device=flat_mask.device)
-    dummy_mask_01 = (dummy_range[None,:] < cutoff_ixs[:,None])
+    dummy_mask_01 = (dummy_range[None,:] < cutoff_ixs[:,None]).to(ref_feats.dtype)
 
     pause2('DBG_METRICS_MAR6')
     flat_mask_01 = dummy_mask_01[:,unsort_ascending]
@@ -169,25 +180,24 @@ mask,ratios_retained,batch_size=dutils.TODO,
     #=================================================================
     def masking_hook(m,i,o):
         assert imputation == 'zero', 'only zero imputation is supported for channel experiment'
-        o = mask_01 * o
-        #p46()
-        return o
+        assert mask_01.shape[:-2] == o.shape[:-2]
+        new_o = mask_01 * o
+        return new_o
+
     hook = feat_layer.register_forward_hook(masking_hook)
     with torch.inference_mode():
         # repeat or expand dimension 0
-        scores = model(ref.repeat(len(ratios_retained),1,1,1))
+        with register_feat_hook(feat_layer) as feats_of_masked_:
+            scores = model(ref.repeat(len(ratios_retained),1,1,1))
+            feats_of_masked = feats_of_masked_[0]
     hook.remove()
-    #p46()
-
     probs = torch.softmax(scores,dim=1)
     if scores.ndim == 4:
         scores = scores.mean(dim=(-1,-2))
         probs = probs.mean(dim=(-1,-2))
     probs = probs[:,target_id]
     scores = scores[:,target_id]
-    #p46()
-    #dutils.note('check broadcasting of probs')
-    #dutils.pause();
+
     assert probs.ndim == 1, f'probs.ndim {probs.ndim}'
     diff_in_probs = probs - ref_probs
     '''
@@ -195,12 +205,11 @@ mask,ratios_retained,batch_size=dutils.TODO,
     # (1,3,300,500) --> (1,20,2,5)
     # (1,1000) 
     '''
-    # model(deleted_ref)
-    # ref = dutils.hardcode(masked = torch.zeros_like(ref))
+
     probs = tensor_to_numpy(probs)
     diff_in_probs = tensor_to_numpy(diff_in_probs)
     ref_probs = tensor_to_numpy(ref_probs)
-    #p47()
+
     results = dict(
         probs = probs,
         ref_probs = ref_probs,
@@ -208,13 +217,6 @@ mask,ratios_retained,batch_size=dutils.TODO,
         ratios = ratios_retained,
         imputation = imputation,
     )
-    feats = feat_layer.feats
-    assert feats.ndim == 2, f'feats dim {feats.ndim}'
-    feat_distance = ((feats - ref_feats)**2).sum(dim=-1)
-    feat_distance = tensor_to_numpy(feat_distance)
-    results['feat_distance'] = feat_distance
-
-
     return results
 
 def add_to_results_xz(method=dutils.TODO,
@@ -224,7 +226,6 @@ def add_to_results_xz(method=dutils.TODO,
             imputation = 'blur',
             **kwargs,
 ):
-    #p45()
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 
     methoddir = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}')
@@ -258,7 +259,7 @@ def add_to_results_xz(method=dutils.TODO,
         stub = os.path.basename(resultxzfile)
         imroot = os.path.basename(os.path.dirname(resultxzfile))
         new_resultsfile = os.path.join(methoddir,imroot,stub)
-        #p46()
+
         with lzma.open(new_resultsfile,'wb') as f:
             pickle.dump(result,f)
         with lzma.open(new_resultsfile,'rb') as f:
@@ -269,22 +270,24 @@ def add_to_results_xz(method=dutils.TODO,
             assert set(reloaded['insertion'].keys()) == set(small_loaded['insertion'].keys())
             assert set(reloaded['deletion'].keys()) == set(small_loaded['deletion'].keys())
 #.............................................................
-        #dutils.pause()
+
 def run(method=dutils.TODO,dataset=dutils.TODO,arch=dutils.TODO,
 results_root_dir=dutils.TODO,
-save_root_dir=dutils.TODO,
+save_root_dir=METRICS_ROOT_DIR,
 batch_size = dutils.TODO,
 max_blur = dutils.TODO,
 imputation='blur',
 ratios = dutils.TODO,
 start = 0,
 feat_layer = None,
+feat_layer_name = None,
 device = dutils.hardcode(device="cuda"),
 experiment = 'class',
+input_size=None,
+ntodo=-1,
 **ignore
 ):
-    p46()
-    feat_layer_name = feat_layer
+
     if len(ignore):
         print(colorful.red(f'need toadd {ignore.keys()} to run arguments'))
     #ratios_retained = dutils.hardcode(ratios_retained=np.linspace(0,1,10))
@@ -296,23 +299,14 @@ experiment = 'class',
         if not torch.cuda.is_available():
             device = 'cpu'
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    #if dataset == 'voc_2007':
-    if True:
-# model = dutils.hardcode(model = torchvision.models.vgg16(pretrained=True))
-        model = get_model(
-                arch=arch,
-                dataset=dataset,
-                convert_to_fully_convolutional=True,
-            )
-# dutils.pause()
-        model.to(device)
-        model.eval()
-    #elif 'imagenet' in dataset:
-    #    dutils.pause()
-    #    pass
-    #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    #if dataset == 'voc_2007':
-        # ref = dutils.hardcode(ref = torch.zeros(1,3,224,224,device=device))
+    model = get_model(
+            arch=arch,
+            dataset=dataset,
+            convert_to_fully_convolutional=True,
+        )
+    model.to(device)
+    model.eval()
+    if input_size is None:
         if dataset in ['voc_2007','coco']:
             if method == "rise":
                 input_size = (224, 224)
@@ -324,49 +318,47 @@ experiment = 'class',
             input_size = (32,32)
         else:
             dutils.pause()
-        #subset = 'test'
-        if dataset == 'voc_2007':
-            subset = 'test'
-        elif dataset == 'coco':
-            subset = 'val2014'
-        elif dataset == 'imagenet-5000':
-            subset = 'val'
-        elif dataset in ['cifar-10','cifar-100']:
-            subset = 'val'
-        elif dataset in ['mnist']:
-            subset = 'val'
-        else:
-            assert False
-       
-        transform = get_transform(size=input_size,
-                                  dataset=dataset)
-        
-        data = get_dataset(name=dataset,
-                            subset=subset,
-                            transform=transform,
-                            download=False,
-                            limiter=None)
-    if feat_layer is not dutils.TODO:
-        feat_layers,layer_names = get_layernames(network=arch,model=model)
-        feat_layer = feat_layers[layer_names.index(feat_layer)]
-        p46()
-    #elif 'imagenet' in dataset:
-    #    dutils.pause()
-    #    pass
+    #subset = 'test'
+    if dataset == 'voc_2007':
+        subset = 'test'
+    elif dataset == 'coco':
+        subset = 'val2014'
+    elif dataset == 'imagenet-5000':
+        subset = 'val'
+    elif dataset in ['cifar-10','cifar-100']:
+        subset = 'val'
+    elif dataset in ['mnist']:
+        subset = 'val'
+    else:
+        assert False
+    
+    transform = get_transform(size=input_size,
+                                dataset=dataset)
+    
+    data = get_dataset(name=dataset,
+                        subset=subset,
+                        transform=transform,
+                        download=False,
+                        limiter=None)
+    if feat_layer is None and isinstance(feat_layer_name,str):
+        names_and_mods = list(model.named_modules())
+        layer_names = [el[0] for el in names_and_mods]
+        feat_layers = [el[1] for el in names_and_mods]
+        feat_layer = feat_layers[layer_names.index(feat_layer_name)]
+
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
     if imputation == 'blur':
-        save_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}")
-        #wandb.init(project=f"{dataset}-{method}-{arch}")
+        save_dir = os.path.join(save_root_dir,"deletion",f"{dataset}-{method}-{arch}")
     else:
-        save_dir = os.path.join(METRICS_ROOT_DIR,"deletion",f"{dataset}-{method}-{arch}-{imputation}")
+        save_dir = os.path.join(save_root_dir,"deletion",f"{dataset}-{method}-{arch}-{imputation}")
     methoddir = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}')
     pattern = os.path.join(methoddir,'*','*.xz') 
     xzfiles = glob.glob(pattern)
     assert len(xzfiles), f'xzfiles is empty, {methoddir}'
-    #p46()
-    xzfiles = xzfiles[start:]
+
+    xzfiles = xzfiles[start:( start+ntodo if ntodo not in (None,-1) else len(xzfiles))]
     # xzfiles = list(sorted(glob.glob(os.path.join(methoddir,'*','*.xz'))))
-    # p47()
+
     running_scores = {'insertion':[],'deletion':[]}
     for xzfile in tqdm.tqdm(dutils.trunciter(xzfiles,enabled=False,max_iter=10)):
         print(xzfile)
@@ -374,7 +366,7 @@ experiment = 'class',
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         found = False
         imroot = os.path.basename(os.path.dirname(xzfile))
-        #dutils.pause()
+
         for imix,impath in enumerate(data.images):
             if imroot in impath:
                 found = True
@@ -383,20 +375,18 @@ experiment = 'class',
         ref,y = data[imix]
         ref = ref[None]
         ref = ref.to(device)
-        # dutils.pause()
-        pass
-        #ref = dutils.hardcode(ref = torch.randn(1,3,224,224))
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         try:
             with lzma.open(xzfile,'rb') as f:
                 loaded = pickle.load(f)
-        except Exception:
-            print(f'{xzfile} is corrupt')
-            # dutils.pause()
+        except Exception as e:
+            print(traceback.format_exc())
+            p46()
             continue
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         class_id =loaded['class_id']
         saliency = loaded['saliency']
+
         '''
         if saliency.max() > 1:
             saliency = saliency/saliency.max()
@@ -408,13 +398,14 @@ experiment = 'class',
         class_name = loaded['class_name']
         assert saliency.ndim == 4
         saliency = torch.tensor(saliency,device=ref.device)
-        saliency = torch.nn.functional.interpolate(saliency,ref.shape[-2:],mode="bilinear")
+        if experiment != 'channel':
+            saliency = torch.nn.functional.interpolate(saliency,ref.shape[-2:],mode="bilinear")
         #dutils.img_save(saliency,"saliency.png")
         #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         results_deletion = run_deletion_game(model,ref,class_id,
-           saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer,feat_layer_name=feat_layer_name)
+           saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer,feat_layer_name=feat_layer_name,experiment=experiment)
         results_insertion = run_deletion_game(model,ref,class_id,
-            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer,feat_layer_name=feat_layer_name)
+            1-saliency,ratios_retained,batch_size=batch_size,max_blur=max_blur,imputation=imputation, feat_layer = feat_layer,feat_layer_name=feat_layer_name,experiment=experiment)
         results = dict(
             insertion = results_insertion,
             deletion= results_deletion,
@@ -429,7 +420,6 @@ experiment = 'class',
         running_scores['deletion'].append(results_deletion['probs'])
         wandb.log(dict(running_insertion_score = np.array(running_scores['insertion']).mean()),commit=False)
         wandb.log(dict(running_deletion_score = np.array(running_scores['deletion']).mean()),commit=False)
-        # break
         """
         deletion/voc_2007-grad_cam-resnet50
         """
@@ -439,13 +429,12 @@ experiment = 'class',
         savepath = os.path.join(save_dir,imroot,classname_classid_xz)
 
         print(savepath)
-        #dutils.pause()
-        # p46()
+
         with lzma.open(savepath,'wb') as f:
             pickle.dump(results,f)
         wandb.log(dict(xzfile=xzfile),commit=False)
         wandb.log({})
-    #dutils.pause()
+
     '''
     <parent-directory>/000001/dog11.xz
     <parent-directory>/000001/person14.xz
