@@ -1,5 +1,6 @@
 import dutils
 dutils.init()
+import gc
 import os
 import sys
 import argparse
@@ -191,6 +192,8 @@ def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
                 break
         '''
         del model
+        gc.collect()
+        torch.cuda.empty_cache()
     # dutils.pause()
     
     return cascade_sanity_results
@@ -300,38 +303,23 @@ def get_wrapper_for_multithresh_saliency(method,dataset):
         from multithresh_saliency.multithresh_saliency_ import main
         from multithresh_saliency.wrapper_for_torchray import get_settings, default_values
         ##................................
-        #args.network = dutils.TODO
-        #args.layer = dutils.TODO
-        ref2 = dutils.TODO
         feat_layer = dutils.TODO
-        ##detransform = dutils.TODO
         detransform = None
-        ## args.epochs= dutils.hardcode(epochs = 10)
         ##................................
         args = get_settings(dataset, default_values['multithresh_saliency'])
         dutils.pause2('DBG_PARSE_APR1')
         args.target_class = target
-        args.class_id = target
         ##................................
         args.game_type = 'both'
-        #args.n_areas = 20
-        #args.max_blur = 20
         ##................................
-        #if os.environ.get('USE_EARLY_STOPPING',False) == '1':
-        #    args.use_early_stopping = True
-        #if os.environ.get('GAME_TYPE',False):
-        #    args.game_type = os.environ['GAME_TYPE']
-        #if os.environ.get('N_AREAS',False):
-        #    args.n_areas = int(os.environ['N_AREAS'])
         info = main(ref, model=model,
             feat_layer = feat_layer,
-            ref2 = ref2,
             detransform = detransform,
             **vars(args),
             )
         saliency = info['max_of_smooth_mask']
-        # make saliency as an numpy array whose max is 1 and min is 0
-        # saliency [0.1, -11, 43, 0.0001]
+        del info
+        # normalize saliency to [0,1]
         dutils.pause2('DBG_MULTI_SANITY_APR1')
         if saliency.min() != saliency.max():
             saliency1 = saliency - saliency.min()
