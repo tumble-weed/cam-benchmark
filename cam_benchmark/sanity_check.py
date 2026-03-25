@@ -1,12 +1,18 @@
 import dutils
 dutils.init()
+import os
+import sys
+import argparse
+import pickle
+import torch
+import torch.nn
 import torchvision
 import skimage.transform
-import torch.nn
+import skimage.io
 from PIL import Image
 from torchray.benchmark.models import get_transform
 from torchray.benchmark.datasets import get_dataset
-METRICS_ROOT_DIR = '/data/bigfiles/other/metrics-torchray' 
+METRICS_ROOT_DIR = os.environ.get('TORCHRAYMETRICS', '/data/bigfiles/other/metrics-torchray')
 ROOT_DIR_FOR_SAVE= os.path.join(METRICS_ROOT_DIR,'sanity')
 os.makedirs(ROOT_DIR_FOR_SAVE,exist_ok=True)
 #..................................................
@@ -24,7 +30,8 @@ def randomize_conv2d_layer(l):
     #l.weight.data.copy_(torch.randn_like(l.weight))
     #torch.nn.init.xavier_uniform_(l.weight)
     torch.nn.init.trunc_normal_(l.weight, mean=0.0, std=0.01, a=-2.0, b=2.0, generator=None)
-    l.bias.data.copy_(torch.zeros_like(l.bias))
+    if l.bias is not None:
+        l.bias.data.copy_(torch.zeros_like(l.bias))
     pass
 #..................................................
 def randomize_last_n_layers(model,n):
@@ -54,13 +61,56 @@ def randomize_last_n_layers(model,n):
 
             # break
         # dutils.pause()
-    elif 'resnet' in str(model.__class__):
-        dutils.pause()
-    # pass
+    elif 'resnet' in str(model.__class__).lower():
+        # Collect Conv2d and Linear layers in top-to-bottom order
+        # fc first, then layer4 -> layer1, then conv1
+        all_layers = []
+        all_layers.append(model.fc)
+        for layer_group_name in ['layer4','layer3','layer2','layer1']:
+            layer_group = getattr(model, layer_group_name)
+            blocks = list(layer_group.children())
+            for block in reversed(blocks):
+                for mod in reversed(list(block.modules())):
+                    if isinstance(mod, (torch.nn.Conv2d, torch.nn.Linear)):
+                        all_layers.append(mod)
+        all_layers.append(model.conv1)
+        n_done = 0
+        for l in all_layers:
+            str_class = str(l.__class__).lower()
+            print(str_class)
+            if 'linear' in str_class:
+                randomize_linear_layer(l)
+                n_done += 1
+            if 'conv2d' in str_class:
+                randomize_conv2d_layer(l)
+                n_done += 1
+            if n_done == n:
+                break
+        return (n_done < n)
 # def create_randomized_model(model,n_layers):
 #     return False
+def _build_resnet50_layer_name_dict():
+    """Build layer name dict for resnet50 programmatically from model structure."""
+    import torchvision.models as models
+    import torch.nn as nn
+    model = models.resnet50(pretrained=False)
+    d = {0: 'original'}
+    idx = 1
+    d[idx] = 'fc'
+    idx += 1
+    for layer_group_name in ['layer4','layer3','layer2','layer1']:
+        layer_group = getattr(model, layer_group_name)
+        blocks = list(layer_group.named_children())
+        for block_name, block in reversed(blocks):
+            for name, mod in reversed(list(block.named_modules())):
+                if isinstance(mod, (nn.Conv2d, nn.Linear)):
+                    d[idx] = f'{layer_group_name}.{block_name}.{name}'
+                    idx += 1
+    d[idx] = 'conv1'
+    return d
+
 layer_name_dict = dict(
-    dict(vgg16 = 
+    vgg16 =
     {0:'original',
         1:'fc8',
     2:'fc7',
@@ -86,8 +136,8 @@ layer_name_dict = dict(
 
     15:'conv1_2',
     16:'conv1_1',
-        }
-    ),
+        },
+    resnet50 = _build_resnet50_layer_name_dict(),
 )
 def run_cascade_sanity(ref,target,run_method,method,dataset,arch,device='cuda'):
     assert arch in layer_name_dict
@@ -168,7 +218,6 @@ save_dir = dutils.TODO,
         dutils.img_save(resultsi['saliency'],os.path.join(image_save_dir,f'{n_layers_randomized}_{layer_name_dict[arch][n_layers_randomized]}.png'),use_matplotlib=False,cmap='jet')
         if i == 0:
             dutils.img_save(skimage.transform.resize(im_np,ref.shape[-2:],anti_aliasing=True),os.path.join(image_save_dir,f'original_image.png'),use_matplotlib=False,cmap='jet')
-    dutils.pause()
     pass
 # run_and_save_sanity_check()
 def dummy_attribution(model,ref,target):
@@ -246,10 +295,10 @@ def get_wrapper_for_extremal_perturbation_with_simple_scale_and_crop_with_gp(met
     return wrapper_for_extremal_perturbation
 
 #=========================================================================================
-def get_wrapper_for_multithresh_saliency(method,dataset,method_kwargs):
+def get_wrapper_for_multithresh_saliency(method,dataset):
     def wrapper_for_multithresh_saliency(model,ref,target):
-        method_kwargs = {}
         from multithresh_saliency.multithresh_saliency_ import main
+        from multithresh_saliency.wrapper_for_torchray import get_settings, default_values
         ##................................
         #args.network = dutils.TODO
         #args.layer = dutils.TODO
@@ -259,9 +308,8 @@ def get_wrapper_for_multithresh_saliency(method,dataset,method_kwargs):
         detransform = None
         ## args.epochs= dutils.hardcode(epochs = 10)
         ##................................
-        from multithresh_saliency.wrapper_for_torchray import get_settings
-        args = get_settings(dataset)
-        pause2('DBG_PARSE_APR1')
+        args = get_settings(dataset, default_values['multithresh_saliency'])
+        dutils.pause2('DBG_PARSE_APR1')
         args.target_class = target
         args.class_id = target
         ##................................
@@ -275,44 +323,22 @@ def get_wrapper_for_multithresh_saliency(method,dataset,method_kwargs):
         #    args.game_type = os.environ['GAME_TYPE']
         #if os.environ.get('N_AREAS',False):
         #    args.n_areas = int(os.environ['N_AREAS'])
-        info = main(ref, model=model, 
+        info = main(ref, model=model,
             feat_layer = feat_layer,
             ref2 = ref2,
             detransform = detransform,
             **vars(args),
-            # network=args.network,layer=args.layer, 
-            # alpha=args.alpha, beta=args.beta, alpha_lambda=args.alpha_lambda, 
-            # tv_lambda=args.tv_lambda, epochs=args.epochs,
-            # learning_rate=args.learning_rate, momentum=args.momentum, 
-            # print_iter=args.print_iter, decay_iter=args.decay_iter,
-            # decay_factor=args.decay_factor, 
-            # device=args.device,method=args.method,
-            # target_class= args.target_class,
-            # dataset = args.dataset,
-            
-            # mode = args.mode,
-            
-            # n_areas = args.n_areas,
-            # window_size = args.window_size,
-            # UTILIZE_T_GRAD = args.UTILIZE_T_GRAD,
-            # rng_state = args.rng_state,
-            # perturbation = args.perturbation,
-            # pre_mask_generator_type = args.pre_mask_generator_type,
-            )        
+            )
         saliency = info['max_of_smooth_mask']
         # make saliency as an numpy array whose max is 1 and min is 0
         # saliency [0.1, -11, 43, 0.0001]
-        pause2('DBG_MULTI_SANITY_APR1')  
+        dutils.pause2('DBG_MULTI_SANITY_APR1')
         if saliency.min() != saliency.max():
             saliency1 = saliency - saliency.min()
-            #  [0.1 - -11, -11 - -11, 43 - -11,0.0001 - -11]
-            #  [11.1, 0, 54, 11.0001]
-            #  [11./54, 0/54,54/54,11.0001/54]
-            #  [0.2,0,1,0.2]
             saliency1 = saliency1/saliency1.max()
         else:
             saliency1 = (saliency+1)/(1+saliency.max())
-        pause2('DBG_MULTI_SANITY_APR1')  
+        dutils.pause2('DBG_MULTI_SANITY_APR1')
         saliency = saliency1
         return saliency #info['max_of_smooth_mask']
     return wrapper_for_multithresh_saliency
@@ -383,12 +409,7 @@ def main(method,dataset,arch,imroot,target,device='cuda'):
         run_method = get_wrapper_for_extremal_perturbation(method,dataset,method_kwargs)
         # pass
     elif method.startswith('multithresh_saliency'):
-        # run_method = dutils.hardcode(run_method = lambda *args,**kwargs:torch.zeros(1,1,224,224,device=device))
-        # wrapper_for_extremal_perturbation
-        #method_kwargs = {'areas':[0.025],'smooth':0 }
-        #method_kwargs = {'areas':[0.1],'smooth':0 }
-        method_kwargs = {}
-        run_method = get_wrapper_for_multithresh_saliency(method,dataset,method_kwargs)
+        run_method = get_wrapper_for_multithresh_saliency(method,dataset)
         # pass
     elif method == 'dummy1':
         run_method = dummy_attribution
