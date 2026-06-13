@@ -16,11 +16,11 @@ import cam_benchmark.road
 import wandb
 from torchray.benchmark.models import get_model, get_transform
 from torchray.benchmark.datasets import get_dataset
-METRICS_ROOT_DIR= os.getenv('TORCHRAYMETRICS',"/root/bigfiles/other/metrics-torchray/")
-# RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray")
-RESULTS_ROOT_DIR = os.getenv('TORCHRAYRESULTS',"/root/bigfiles/other/metrics-torchray/")
-#RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray/old_multi_results_mar4")
-#RESULTS_ROOT_DIR2 = dutils.hardcode(RESULTS_ROOT_DIR="/root/bigfiles/other/results-torchray2")
+METRICS_ROOT_DIR= os.getenv('TORCHRAYMETRICS',"/data/bigfiles/other/metrics-torchray/")
+# RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/data/bigfiles/other/results-torchray")
+RESULTS_ROOT_DIR = os.getenv('TORCHRAYRESULTS',"/data/bigfiles/other/metrics-torchray/")
+#RESULTS_ROOT_DIR = dutils.hardcode(RESULTS_ROOT_DIR="/data/bigfiles/other/results-torchray/old_multi_results_mar4")
+#RESULTS_ROOT_DIR2 = dutils.hardcode(RESULTS_ROOT_DIR="/data/bigfiles/other/results-torchray2")
 def _get_binary_mask(mask, ratio_retained=None):
     if ratio_retained is None:
         if not( all([
@@ -45,6 +45,7 @@ def impute_where_0(ref,mask,ratio_retained=None,
 perturbation = elp_masking.BLUR_PERTURBATION,
 max_blur=20,
 imputation='blur',
+generator=None,
 ):
     mask_01 = _get_binary_mask(mask,ratio_retained)
     if imputation == 'blur':
@@ -56,14 +57,17 @@ imputation='blur',
                                 # num_levels=12,
                                 variant=elp_masking.PRESERVE_VARIANT,
                                 max_blur=max_blur,
-                                smooth=0)    
+                                smooth=0)
     elif imputation == 'road':
         imputer = cam_benchmark.road.NoisyLinearImputer()
         assert ref.shape[0] == 1
         assert mask_01.shape[0] == 1
-        masked = imputer(ref[0].cpu(),mask_01[0,0].cpu())
+        masked = imputer(ref[0].cpu(),mask_01[0,0].cpu(), generator=generator)
         masked = masked[None,...]
         pass
+    elif imputation == 'zero':
+        # same as deletion2.py impute_where_0 'zero' branch
+        masked = ref * mask_01
     else:
         p47()
     pause2('DBG_METRICS_MAR6')
@@ -75,6 +79,9 @@ mask,ratios_retained,batch_size=dutils.TODO,
     max_blur=20,
     imputation ='blur',
     feat_layer = None,
+    experiment = "class",
+    feat_layer_name = None,
+    return_deleted_images = False,
 ):
     device = ref.device
     ratios_retained = torch.tensor(ratios_retained,device=device)
@@ -141,7 +148,10 @@ mask,ratios_retained,batch_size=dutils.TODO,
         with dutils.Timer('concurrent-imputation') as timer:
             import concurrent.futures
 
-            def process_mask(i,mask_01_i, ratio_retained):
+            # Create per-index generators so threads don't race on shared RNG
+            generators = [torch.Generator().manual_seed(i) for i in range(len(ratios_retained))]
+
+            def process_mask(i,mask_01_i, ratio_retained, gen):
                 pause2('DBG_METRICS_MAR6')
                 deleted_ref, perturbation_result = impute_where_0(
                     ref,
@@ -149,13 +159,13 @@ mask,ratios_retained,batch_size=dutils.TODO,
                     ratio_retained=None,
                     perturbation=perturbation,
                     max_blur=max_blur,
-                    imputation=imputation
+                    imputation=imputation,
+                    generator=gen,
                 )
                 return i, deleted_ref, perturbation_result
 
-            # Run multithreaded
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                futures = [executor.submit(process_mask,i, mask_01[i:i+1], ratio_retained) for i, ratio_retained in enumerate(ratios_retained)]
+            with dutils.MaybeThreadPoolExecutor() as executor:
+                futures = [executor.submit(process_mask, i, mask_01[i:i+1], ratio_retained, generators[i]) for i, ratio_retained in enumerate(ratios_retained)]
 
                 for future in concurrent.futures.as_completed(futures):
                     i, deleted_ref_result, perturbation_result = future.result()
@@ -163,11 +173,12 @@ mask,ratios_retained,batch_size=dutils.TODO,
                     perturbation = perturbation_result  # If `perturbation` must be shared, this line may need rethinking.
     
     else:
-        with dutils.Timer('looped-imputation') as timer0:    
+        with dutils.Timer('looped-imputation') as timer0:
             for i,ratio_retained in enumerate(ratios_retained):
                 #dutils.img_save(mask_01[i],f'mask_01_{mask_01[i].sum()}.png')
                 pause2('DBG_METRICS_MAR6')
-                deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation)
+                gen = torch.Generator().manual_seed(i) if imputation == 'road' else None
+                deleted_ref, perturbation= impute_where_0(ref,mask_01[i:i+1],ratio_retained=None,perturbation=perturbation,max_blur=max_blur,imputation=imputation,generator=gen)
                 deleted_images[i:i+1] = deleted_ref
     #................................................................
     # for yy in [0,-1]:dutils.img_save(mask_01[yy],f'mask01_{yy}.png',vmin=0,vmax=1,cmap='gray',use_matplotlib=False)
@@ -207,6 +218,9 @@ mask,ratios_retained,batch_size=dutils.TODO,
             ratios = ratios_retained,
             imputation = imputation,
         )
+        if return_deleted_images:
+            # opt-in (analysis/visualization callers only); not stored in metrics xz
+            results['deleted_images'] = tensor_to_numpy(deleted_images)
     if feat_layer is not None:
         feats = feat_layer.feats
         assert feats.ndim == 2
@@ -307,7 +321,7 @@ def get_data(method,dataset):
                         limiter=None)   
     return data
 
-def _find_image_ix(xzfile):    
+def _find_image_ix(data,xzfile):    
     found = False
     imroot = os.path.basename(os.path.dirname(xzfile))
     #dutils.pause()
@@ -321,7 +335,7 @@ def run_on_xzfile(xzfile,model,ratios_retained,imputation,max_blur,batch_size,fe
     print(xzfile)
     xzfile = os.path.abspath(xzfile)
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-    imix,imroot = _find_image_ix(xzfile)
+    imix,imroot = _find_image_ix(data,xzfile)
     #imix = 0
     ref,y = data[imix]
     assert ref.ndim == 3,'expecting ref to be 3d'
