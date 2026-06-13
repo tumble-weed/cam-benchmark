@@ -1,18 +1,20 @@
-import dutils
-dutils.init()
+import argparse
 import gc
 import os
-import sys
-import argparse
 import pickle
+import sys
+
+import dutils
+import skimage.io
+import skimage.transform
 import torch
 import torch.nn
 import torchvision
-import skimage.transform
-import skimage.io
+from dutils import p47, tensor_to_numpy
 from PIL import Image
-from torchray.benchmark.models import get_transform
 from torchray.benchmark.datasets import get_dataset
+from torchray.benchmark.models import get_transform
+
 METRICS_ROOT_DIR = os.environ.get('TORCHRAYMETRICS', '/data/bigfiles/other/metrics-torchray')
 ROOT_DIR_FOR_SAVE= os.path.join(METRICS_ROOT_DIR,'sanity')
 os.makedirs(ROOT_DIR_FOR_SAVE,exist_ok=True)
@@ -92,8 +94,8 @@ def randomize_last_n_layers(model,n):
 #     return False
 def _build_resnet50_layer_name_dict():
     """Build layer name dict for resnet50 programmatically from model structure."""
-    import torchvision.models as models
     import torch.nn as nn
+    import torchvision.models as models
     model = models.resnet50(pretrained=False)
     d = {0: 'original'}
     idx = 1
@@ -220,14 +222,24 @@ save_dir = dutils.TODO,
         n_layers_randomized = resultsi['n_layers_randomized']
         dutils.img_save(resultsi['saliency'],os.path.join(image_save_dir,f'{n_layers_randomized}_{layer_name_dict[arch][n_layers_randomized]}.png'),use_matplotlib=False,cmap='jet')
         if i == 0:
-            dutils.img_save(skimage.transform.resize(im_np,ref.shape[-2:],anti_aliasing=True),os.path.join(image_save_dir,f'original_image.png'),use_matplotlib=False,cmap='jet')
+            # Save the input photo at the same spatial size as the saliencies.
+            # NB: dutils.img_save mis-handles RGB (H,W,3) — it treats H as a batch
+            # dimension and only saves the first row. Use skimage.io.imsave directly.
+            resized = skimage.transform.resize(im_np,ref.shape[-2:],anti_aliasing=True)
+            os.makedirs(image_save_dir,exist_ok=True)
+            skimage.io.imsave(
+                os.path.join(image_save_dir,f'original_image.png'),
+                skimage.img_as_ubyte(resized),
+            )
     pass
 # run_and_save_sanity_check()
 def dummy_attribution(model,ref,target):
     return torch.zeros(1,1,224,224,device=ref.device)
 
 #=========================================================================================
-import torchray.attribution.extremal_perturbation_variants as  extremal_perturbation_variants
+import torchray.attribution.extremal_perturbation_variants as extremal_perturbation_variants
+
+
 def get_wrapper_for_extremal_perturbation(method,dataset,method_kwargs):
     def wrapper_for_extremal_perturbation(model,ref,target):
         if True:
@@ -295,13 +307,16 @@ def get_wrapper_for_extremal_perturbation_with_simple_scale_and_crop_with_gp(met
             # point = _saliency_to_point(torch.tensor(info['saliency']))
             # assert (tensor_to_numpy(point) == tensor_to_numpy(info['point'])).all()
             return info['saliency']
-    return wrapper_for_extremal_perturbation
+    return wrapper_for_extremal_perturbation_with_simple_scale_and_crop_with_gp
 
 #=========================================================================================
-def get_wrapper_for_multithresh_saliency(method,dataset):
+def get_wrapper_for_multithresh_saliency(method,dataset,epochs=None):
     def wrapper_for_multithresh_saliency(model,ref,target):
         from multithresh_saliency.multithresh_saliency_ import main
-        from multithresh_saliency.wrapper_for_torchray import get_settings, default_values
+        from multithresh_saliency.wrapper_for_torchray import (
+            default_values,
+            get_settings,
+        )
         ##................................
         feat_layer = dutils.TODO
         detransform = None
@@ -309,6 +324,8 @@ def get_wrapper_for_multithresh_saliency(method,dataset):
         args = get_settings(dataset, default_values['multithresh_saliency'])
         dutils.pause2('DBG_PARSE_APR1')
         args.target_class = target
+        if epochs is not None:
+            args.epochs = epochs
         ##................................
         args.game_type = 'both'
         ##................................
@@ -331,7 +348,8 @@ def get_wrapper_for_multithresh_saliency(method,dataset):
         return saliency #info['max_of_smooth_mask']
     return wrapper_for_multithresh_saliency
 #=========================================================================================
-def main(method,dataset,arch,imroot,target,device='cuda'):
+def run(method,dataset,arch,imroot,target,device='cuda',method_kwargs=None):
+    method_kwargs = method_kwargs or {}
     dutils.note('pass device')
     #metrics_root_dir = '/data/bigfiles/other/results-torchray'
     # metrics_root_dir = '/data/bigfiles/other/metrics-torchray'
@@ -392,12 +410,12 @@ def main(method,dataset,arch,imroot,target,device='cuda'):
     if method.startswith('extremal_perturbation'):
         # run_method = dutils.hardcode(run_method = lambda *args,**kwargs:torch.zeros(1,1,224,224,device=device))
         # wrapper_for_extremal_perturbation
-        #method_kwargs = {'areas':[0.025],'smooth':0 }
-        method_kwargs = {'areas':[0.1],'smooth':0 }
-        run_method = get_wrapper_for_extremal_perturbation(method,dataset,method_kwargs)
+        #ep_method_kwargs = {'areas':[0.025],'smooth':0 }
+        ep_method_kwargs = {'areas':[0.1],'smooth':0 }
+        run_method = get_wrapper_for_extremal_perturbation(method,dataset,ep_method_kwargs)
         # pass
     elif method.startswith('multithresh_saliency'):
-        run_method = get_wrapper_for_multithresh_saliency(method,dataset)
+        run_method = get_wrapper_for_multithresh_saliency(method,dataset,**method_kwargs)
         # pass
     elif method == 'dummy1':
         run_method = dummy_attribution
@@ -447,7 +465,7 @@ def test():
     args,unknown_argv = parser.parse_known_args()
     del sys.argv[1:]
     sys.argv.extend(unknown_argv)
-    main(args.method,args.dataset,args.arch,args.imroot,args.target)
+    run(args.method,args.dataset,args.arch,args.imroot,args.target)
     # /root/evaluate-saliency-4/cam-benchmark/cam_benchmark/ILSVRC2012_val_00015410.JPEG , 13
     ############################################
 
