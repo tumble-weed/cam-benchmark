@@ -352,12 +352,19 @@ ntodo=-1,
     else:
         save_dir = os.path.join(save_root_dir,"deletion",f"{dataset}-{method}-{arch}-{imputation}")
     methoddir = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}')
-    pattern = os.path.join(methoddir,'*','*.xz') 
+    pattern = os.path.join(methoddir,'*','*.xz')
     xzfiles = glob.glob(pattern)
     assert len(xzfiles), f'xzfiles is empty, {methoddir}'
 
+    # Order by the dataset's own image order so the start/ntodo slice picks the same
+    # samples the benchmark processes (glob order is arbitrary; a [0:30] slice of it
+    # was an arbitrary 30 files, not samples 0..29). Loud KeyError if an xz's imroot
+    # is not in the dataset.
+    imroot_order = {os.path.splitext(os.path.basename(p))[0]: i
+                    for i, p in enumerate(data.images)}
+    xzfiles = sorted(xzfiles, key=lambda x: imroot_order[os.path.basename(os.path.dirname(x))])
+
     xzfiles = xzfiles[start:( start+ntodo if ntodo not in (None,-1) else len(xzfiles))]
-    # xzfiles = list(sorted(glob.glob(os.path.join(methoddir,'*','*.xz'))))
 
     running_scores = {'insertion':[],'deletion':[]}
     for xzfile in tqdm.tqdm(dutils.trunciter(xzfiles,enabled=False,max_iter=10)):
