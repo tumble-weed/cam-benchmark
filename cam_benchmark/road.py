@@ -1,7 +1,9 @@
-import torch
+from typing import Callable, List
+
+import dutils
 import numpy as np
-from typing import List, Callable
-from scipy.sparse import lil_matrix, csc_matrix
+import torch
+from scipy.sparse import csc_matrix, lil_matrix
 from scipy.sparse.linalg import spsolve
 
 neighbors_weights = [((1, 1), 1 / 12),
@@ -82,12 +84,13 @@ class NoisyLinearImputer:
         A[np.arange(numEquations), np.arange(numEquations)] = -sum_neighbors
         return A, b
 
-    def __call__(self, img: torch.Tensor, mask: torch.Tensor):
+    def __call__(self, img: torch.Tensor, mask: torch.Tensor, generator: torch.Generator = None):
         """ Our linear inputation scheme. """
         """
 		This is the function to do the linear infilling
 		img: original image (C,H,W)-tensor;
 		mask: mask; (H,W)-tensor
+		generator: optional torch.Generator for deterministic noise (thread-safe)
 
 		"""
         imgflt = img.reshape(img.shape[0], -1)
@@ -102,8 +105,8 @@ class NoisyLinearImputer:
         # Fill the values with the solution of the system.
         img_infill = imgflt.clone()
         img_infill[:, indices_linear] = res.t() + self.noise * \
-            torch.randn_like(res.t())
-        #p46()
+            torch.randn(res.t().shape, generator=generator)
+
         if np.isnan(img_infill).any() or np.isinf(img_infill).any():
             dutils.pause()
         return img_infill.reshape_as(img)
