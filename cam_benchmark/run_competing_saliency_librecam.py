@@ -44,7 +44,7 @@ from trivial_gradcam import main as trivial_gradcam_main
 from hacky_scorecam import main as hacky_scorecam_main
 from hacky_relevancecam import main as hacky_relevancecam_main
 import torch
-IMAGENET_ROOT = "/root/bigfiles/dataset/imagenet"
+IMAGENET_ROOT = "/data/bigfiles/dataset/imagenet"
 def denormalize_tensor(t,vgg_mean=[0.485, 0.456, 0.406],
                      vgg_std=[0.229, 0.224, 0.225]):
     device = t.device

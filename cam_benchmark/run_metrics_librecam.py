@@ -19,7 +19,7 @@ from benchmark import settings
 from collections import defaultdict
 import torch
 import dutils
-IMAGENET_ROOT = '/root/bigfiles/dataset/imagenet'
+IMAGENET_ROOT = '/data/bigfiles/dataset/imagenet'
 tensor_to_numpy = lambda t:t.detach().cpu().numpy()
 ##############################################################################################
 

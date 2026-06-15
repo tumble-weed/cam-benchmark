@@ -21,7 +21,7 @@ import pickle
 import glob
 import dutils
 from matplotlib import pyplot as plt
-IMAGENET_ROOT = '/root/bigfiles/dataset/imagenet'
+IMAGENET_ROOT = '/data/bigfiles/dataset/imagenet'
 tensor_to_numpy = lambda t:t.detach().cpu().numpy()
 ##############################################################################################
 def load_metrics(load_dir):
