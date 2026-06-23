@@ -364,7 +364,15 @@ ntodo=-1,
                     for i, p in enumerate(data.images)}
     xzfiles = sorted(xzfiles, key=lambda x: imroot_order[os.path.basename(os.path.dirname(x))])
 
-    xzfiles = xzfiles[start:( start+ntodo if ntodo not in (None,-1) else len(xzfiles))]
+    # Slice by IMAGE index, not file position. start/ntodo come from the benchmark's
+    # --start/--end, which index the dataset by image (attribution_benchmark.py:
+    # chunk = range(start,end)). A multi-label image (VOC/COCO) yields several xz
+    # files, so slicing the file list directly under-covers: ntodo=end-start=100
+    # kept only the first 100 of 156 files, dropping every result past image ~127.
+    # Keep every file whose image's dataset index falls in [start, start+ntodo).
+    hi = start + ntodo if ntodo not in (None, -1) else len(data.images)
+    xzfiles = [p for p in xzfiles
+               if start <= imroot_order[os.path.basename(os.path.dirname(p))] < hi]
 
     running_scores = {'insertion':[],'deletion':[]}
     for xzfile in tqdm.tqdm(dutils.trunciter(xzfiles,enabled=False,max_iter=10)):
