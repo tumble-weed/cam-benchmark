@@ -272,6 +272,7 @@ def add_to_results_xz(method=dutils.TODO,
 #.............................................................
 
 def run(method=dutils.TODO,dataset=dutils.TODO,arch=dutils.TODO,
+dataset_split=None,
 results_root_dir=dutils.TODO,
 save_root_dir=METRICS_ROOT_DIR,
 batch_size = dutils.TODO,
@@ -285,6 +286,7 @@ device = dutils.hardcode(device="cuda"),
 experiment = 'class',
 input_size=None,
 ntodo=-1,
+results_dir_name=None,
 **ignore
 ):
 
@@ -324,7 +326,11 @@ ntodo=-1,
     elif dataset == 'coco':
         subset = 'val2014'
     elif dataset == 'imagenet-5000':
-        subset = 'val'
+        # Reader must match the writer's split: the benchmark ran on dataset_split
+        # (e.g. 'train' -> images val_00005001+), and the results dir name carries
+        # it. Without this, data.images loaded the 'val' set and the imroot lookup
+        # for ordering raised KeyError on the train images.
+        subset = dataset_split if dataset_split else 'val'
     elif dataset in ['cifar-10','cifar-100']:
         subset = 'val'
     elif dataset in ['mnist']:
@@ -347,11 +353,14 @@ ntodo=-1,
         feat_layer = feat_layers[layer_names.index(feat_layer_name)]
 
     #xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+    # dir stem is authored torchray-side (split-aware) and passed in. Fall back to
+    # the bare name for back-compat with callers that don't pass it (no split).
+    dirstem = results_dir_name if results_dir_name is not None else f'{dataset}-{method}-{arch}'
     if imputation == 'blur':
-        save_dir = os.path.join(save_root_dir,"deletion",f"{dataset}-{method}-{arch}")
+        save_dir = os.path.join(save_root_dir,"deletion",dirstem)
     else:
-        save_dir = os.path.join(save_root_dir,"deletion",f"{dataset}-{method}-{arch}-{imputation}")
-    methoddir = os.path.join(results_root_dir,f'{dataset}-{method}-{arch}')
+        save_dir = os.path.join(save_root_dir,"deletion",f"{dirstem}-{imputation}")
+    methoddir = os.path.join(results_root_dir,dirstem)
     pattern = os.path.join(methoddir,'*','*.xz')
     xzfiles = glob.glob(pattern)
     assert len(xzfiles), f'xzfiles is empty, {methoddir}'
